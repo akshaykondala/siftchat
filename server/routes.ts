@@ -118,6 +118,14 @@ export async function registerRoutes(
       if (typeof participantId !== "number" || typeof alternativeIndex !== "number") {
         return res.status(400).json({ message: "participantId and alternativeIndex required" });
       }
+      if (alternativeIndex < 0) {
+        return res.status(400).json({ message: "alternativeIndex must be non-negative" });
+      }
+      // Validate participant belongs to group
+      const participant = await storage.getParticipant(participantId);
+      if (!participant || participant.groupId !== groupId) {
+        return res.status(403).json({ message: "Invalid participant for this group" });
+      }
       const vote = await storage.addVote(groupId, participantId, alternativeIndex);
       res.status(201).json(vote);
     } catch (err) {
@@ -132,6 +140,11 @@ export async function registerRoutes(
       const { participantId } = req.body;
       if (typeof participantId !== "number") {
         return res.status(400).json({ message: "participantId required" });
+      }
+      // Validate participant belongs to group
+      const participant = await storage.getParticipant(participantId);
+      if (!participant || participant.groupId !== groupId) {
+        return res.status(403).json({ message: "Invalid participant for this group" });
       }
       await storage.removeVote(groupId, participantId);
       res.status(204).send();

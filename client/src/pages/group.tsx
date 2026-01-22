@@ -5,11 +5,14 @@ import { useMessages, useSendMessage } from "@/hooks/use-messages";
 import { usePlan, useGeneratePlan } from "@/hooks/use-plans";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import type { PlanVote } from "@shared/schema";
 import { 
   Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
   Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
   CheckCircle2, Info, UserCheck, UserMinus, HelpCircle,
-  Split, ClipboardCheck, User
+  Split, ClipboardCheck, User, ThumbsUp, Crown
 } from "lucide-react";
 import { format } from "date-fns";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -69,7 +72,12 @@ function PlanSidebar({
   isOpen, 
   onClose,
   groupName,
-  slug
+  slug,
+  groupId,
+  participantId,
+  votes,
+  onVote,
+  onRemoveVote
 }: { 
   plan: string, 
   isLoading: boolean, 
@@ -78,9 +86,36 @@ function PlanSidebar({
   isOpen: boolean,
   onClose: () => void,
   groupName: string,
-  slug: string
+  slug: string,
+  groupId: number,
+  participantId: number,
+  votes: PlanVote[],
+  onVote: (alternativeIndex: number) => void,
+  onRemoveVote: () => void
 }) {
   const { toast } = useToast();
+  const [votingIndex, setVotingIndex] = useState<number | null>(null);
+  
+  // Get current user's vote
+  const myVote = votes.find(v => v.participantId === participantId);
+  
+  // Count votes per alternative
+  const voteCounts = votes.reduce((acc, v) => {
+    acc[v.alternativeIndex] = (acc[v.alternativeIndex] || 0) + 1;
+    return acc;
+  }, {} as Record<number, number>);
+  
+  const handleVote = (index: number) => {
+    setVotingIndex(index);
+    onVote(index);
+    setTimeout(() => setVotingIndex(null), 1000);
+  };
+  
+  const handleRemoveVote = () => {
+    setVotingIndex(-1);
+    onRemoveVote();
+    setTimeout(() => setVotingIndex(null), 1000);
+  };
 
   const copyLink = () => {
     const url = `${window.location.origin}/g/${slug}`;
@@ -152,38 +187,48 @@ function PlanSidebar({
                 const data = JSON.parse(plan);
                 return (
                   <div className="space-y-6 animate-in-slide-up">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
-                        <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
-                          <Clock className="w-3 h-3" /> WHEN
+                    {/* Main Plan with Most Popular indicator */}
+                    <div className="relative">
+                      {data.mainPlanIsPopular && (
+                        <div className="absolute -top-2 -right-2 z-10">
+                          <Badge className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white border-0 shadow-md text-[9px] px-2 gap-1">
+                            <Crown className="w-2.5 h-2.5" /> Most Popular
+                          </Badge>
                         </div>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.when}</div>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
-                            <div className="font-bold mb-1 text-primary flex items-center gap-2">
-                              <Clock className="w-3 h-3" /> Event Time
-                            </div>
-                            <p className="text-muted-foreground leading-relaxed">{data.when}</p>
-                          </PopoverContent>
-                        </Popover>
-                      </div>
-                      <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
-                        <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
-                          <MapPin className="w-3 h-3" /> WHERE
+                      )}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
+                          <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
+                            <Clock className="w-3 h-3" /> WHEN
+                          </div>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.when}</div>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
+                              <div className="font-bold mb-1 text-primary flex items-center gap-2">
+                                <Clock className="w-3 h-3" /> Event Time
+                              </div>
+                              <p className="text-muted-foreground leading-relaxed">{data.when}</p>
+                            </PopoverContent>
+                          </Popover>
                         </div>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.where}</div>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
-                            <div className="font-bold mb-1 text-primary flex items-center gap-2">
-                              <MapPin className="w-3 h-3" /> Event Location
-                            </div>
-                            <p className="text-muted-foreground leading-relaxed">{data.where}</p>
-                          </PopoverContent>
-                        </Popover>
+                        <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
+                          <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
+                            <MapPin className="w-3 h-3" /> WHERE
+                          </div>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.where}</div>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
+                              <div className="font-bold mb-1 text-primary flex items-center gap-2">
+                                <MapPin className="w-3 h-3" /> Event Location
+                              </div>
+                              <p className="text-muted-foreground leading-relaxed">{data.where}</p>
+                            </PopoverContent>
+                          </Popover>
+                        </div>
                       </div>
                     </div>
 
@@ -194,20 +239,54 @@ function PlanSidebar({
                           <Split className="w-3.5 h-3.5" /> Alternative Options
                         </div>
                         <div className="space-y-3">
-                          {data.rivalPlans.map((plan: any, i: number) => (
-                            <div key={i} className="relative group">
-                              <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
-                              <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="text-sm font-bold text-foreground">{plan.title}</div>
-                                  <Badge variant="outline" className="text-[9px] bg-amber-500/5 border-amber-500/20 text-amber-600">PROPOSED</Badge>
-                                </div>
-                                <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
-                                  <p className="text-xs text-muted-foreground leading-relaxed">{plan.details}</p>
+                          {data.rivalPlans.map((rivalPlan: any, i: number) => {
+                            const voteCount = voteCounts[i] || 0;
+                            const hasMyVote = myVote?.alternativeIndex === i;
+                            
+                            return (
+                              <div key={i} className="relative group">
+                                <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
+                                <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
+                                  <div className="flex items-center justify-between mb-2 gap-2">
+                                    <div className="text-sm font-bold text-foreground flex-1">{rivalPlan.title}</div>
+                                    <Button
+                                      variant={hasMyVote ? "default" : "outline"}
+                                      size="sm"
+                                      className={cn(
+                                        "h-7 gap-1.5 text-xs",
+                                        hasMyVote && "bg-amber-500 hover:bg-amber-600 text-white"
+                                      )}
+                                      onClick={() => hasMyVote ? handleRemoveVote() : handleVote(i)}
+                                      disabled={votingIndex !== null}
+                                      data-testid={`button-vote-${i}`}
+                                    >
+                                      {votingIndex === i || (votingIndex === -1 && hasMyVote) ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <ThumbsUp className="w-3 h-3" />
+                                      )}
+                                      {voteCount > 0 && <span>{voteCount}</span>}
+                                      {hasMyVote ? "Voted" : "Vote"}
+                                    </Button>
+                                  </div>
+                                  <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                                    <p className="text-xs text-muted-foreground leading-relaxed">{rivalPlan.details}</p>
+                                  </div>
+                                  {/* Supporters from AI */}
+                                  {rivalPlan.supporters?.length > 0 && (
+                                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                                      <span className="text-[10px] text-muted-foreground font-medium">Supporters:</span>
+                                      {rivalPlan.supporters.map((name: string) => (
+                                        <Badge key={name} variant="outline" className="text-[9px] bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
+                                          {name}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -348,9 +427,35 @@ export default function GroupPage() {
   const { data: messages, isLoading: messagesLoading } = useMessages(group?.id || 0);
   const { data: planData } = usePlan(group?.id || 0);
   
+  // Fetch votes for this group
+  const { data: votes = [] } = useQuery<PlanVote[]>({
+    queryKey: ['/api/groups', group?.id, 'votes'],
+    enabled: !!group?.id,
+    refetchInterval: 5000
+  });
+  
   const joinGroup = useJoinGroup();
   const sendMessage = useSendMessage();
   const generatePlan = useGeneratePlan();
+  
+  // Vote mutations
+  const addVoteMutation = useMutation({
+    mutationFn: async ({ groupId, participantId, alternativeIndex }: { groupId: number; participantId: number; alternativeIndex: number }) => {
+      return apiRequest('POST', `/api/groups/${groupId}/votes`, { participantId, alternativeIndex });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups', group?.id, 'votes'] });
+    }
+  });
+  
+  const removeVoteMutation = useMutation({
+    mutationFn: async ({ groupId, participantId }: { groupId: number; participantId: number }) => {
+      return apiRequest('DELETE', `/api/groups/${groupId}/votes`, { participantId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups', group?.id, 'votes'] });
+    }
+  });
 
   const [messageText, setMessageText] = useState("");
   const [participantId, setParticipantId] = useState<number | null>(null);
@@ -487,13 +592,18 @@ export default function GroupPage() {
       {/* Plan Sidebar */}
       <PlanSidebar 
         plan={planData?.summary || ""} 
-        isLoading={!planData && messages?.length > 0} 
+        isLoading={!planData && (messages?.length ?? 0) > 0} 
         onRefresh={() => generatePlan.mutate(group.id)}
         isRefreshing={generatePlan.isPending}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         groupName={group.name}
         slug={slug}
+        groupId={group.id}
+        participantId={participantId}
+        votes={votes}
+        onVote={(alternativeIndex) => addVoteMutation.mutate({ groupId: group.id, participantId, alternativeIndex })}
+        onRemoveVote={() => removeVoteMutation.mutate({ groupId: group.id, participantId })}
       />
     </div>
   );

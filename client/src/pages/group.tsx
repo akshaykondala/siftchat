@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { 
   Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
   Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
-  CheckCircle2, Info, UserCheck, UserMinus, HelpCircle
+  CheckCircle2, Info, UserCheck, UserMinus, HelpCircle,
+  Split, ClipboardCheck, User
 } from "lucide-react";
 import { format } from "date-fns";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -166,6 +167,17 @@ function PlanSidebar({
                       </div>
                     </div>
 
+                    {/* Rival Plan */}
+                    {data.rivalPlan && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 space-y-2">
+                        <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">
+                          <Split className="w-3.5 h-3.5" /> Popular Alternative
+                        </div>
+                        <div className="text-sm font-bold text-amber-900 dark:text-amber-100">{data.rivalPlan.title}</div>
+                        <div className="text-xs text-amber-800/70 dark:text-amber-200/60 leading-relaxed">{data.rivalPlan.details}</div>
+                      </div>
+                    )}
+
                     <div className="space-y-4">
                       <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground uppercase tracking-widest">
                         <Users className="w-3 h-3" /> Attendees
@@ -239,15 +251,22 @@ function PlanSidebar({
                     </div>
 
                     {data.actions?.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground">
-                          <CheckCircle2 className="w-3 h-3" /> TO-DO
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                          <ClipboardCheck className="w-3 h-3" /> Action Items
                         </div>
-                        <div className="space-y-1.5">
-                          {data.actions.map((action: string, i: number) => (
-                            <div key={i} className="flex items-start gap-2 text-xs text-foreground/80 bg-white/30 dark:bg-black/10 p-2 rounded-lg">
-                              <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 mt-1.5" />
-                              {action}
+                        <div className="grid gap-2">
+                          {data.actions.map((action: any, i: number) => (
+                            <div key={i} className="flex items-center justify-between gap-3 text-xs bg-white/40 dark:bg-black/20 p-2.5 rounded-xl border border-primary/5 shadow-sm">
+                              <div className="flex items-start gap-2.5">
+                                <div className="mt-0.5 h-4 w-4 rounded-full border-2 border-primary/30 flex items-center justify-center shrink-0">
+                                  <div className="h-1.5 w-1.5 rounded-full bg-primary/40" />
+                                </div>
+                                <span className="font-medium text-foreground/90">{action.task}</span>
+                              </div>
+                              <Badge variant="outline" className="shrink-0 text-[9px] px-1.5 py-0 bg-primary/5 border-primary/10">
+                                <User className="w-2.5 h-2.5 mr-1" /> {action.assignee}
+                              </Badge>
                             </div>
                           ))}
                         </div>

@@ -132,13 +132,21 @@ async function generatePlanSummary(groupId: number) {
           "what": "Brief event name",
           "when": "Agreed time/date or 'Undecided'",
           "where": "Location or 'Undecided'",
+          "rivalPlan": {
+            "title": "Brief title of the popular alternative",
+            "details": "When/Where/What for this alternative"
+          } | null,
           "who": [
-            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "Why they can't or their proposed alternative if any" }
+            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "Explicitly state why they can't or their specific proposed alternative" }
           ],
-          "actions": ["What needs to be done"]
+          "actions": [
+            { "task": "What needs to be done", "assignee": "Name or 'Unassigned'" }
+          ]
         }
 
-        Be extremely concise. For 'who', analyze the chat to see who confirmed, who declined (and why), and who is still silent or undecided.`
+        Be extremely diligent in extracting 'reason'. If a user says 'I can't because X', 'reason' MUST be 'X'.
+        For 'rivalPlan', identify if there is a second popular option being discussed that hasn't been picked yet.
+        For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
       },
       {
         role: "user",

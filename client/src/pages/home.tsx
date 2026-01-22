@@ -24,7 +24,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-background selection:bg-primary/20 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+    <div className="h-screen w-full bg-background selection:bg-primary/20 overflow-y-auto">
       {/* Abstract Background Shapes */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-primary/5 to-transparent" />
@@ -32,8 +32,8 @@ export default function Home() {
         <div className="absolute bottom-[20%] left-[10%] w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
       </div>
 
-      <main className="relative z-10 container mx-auto px-4 h-screen flex flex-col items-center justify-center">
-        <div className="max-w-2xl w-full text-center space-y-8 animate-in-fade">
+      <main className="relative z-10 container mx-auto px-4 py-8 min-h-full flex flex-col items-center justify-center pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+        <div className="max-w-2xl w-full text-center space-y-8 animate-in-fade py-10">
           
           <div className="space-y-4">
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-secondary/50 border border-secondary text-secondary-foreground text-sm font-medium mb-4">

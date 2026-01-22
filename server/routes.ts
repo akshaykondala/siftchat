@@ -132,12 +132,11 @@ async function generatePlanSummary(groupId: number) {
           "what": "Brief event name",
           "when": "Agreed time/date or 'Undecided'",
           "where": "Location or 'Undecided'",
-          "rivalPlan": {
-            "title": "Brief title of the popular alternative",
-            "details": "When/Where/What for this alternative"
-          } | null,
+          "rivalPlans": [
+            { "title": "Alternative Option Title", "details": "When/Where details for this option" }
+          ],
           "who": [
-            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "Explicitly state why they can't or their specific proposed alternative" }
+            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "MUST specify the exact reason if provided in chat (e.g., 'Working late', 'Too far', 'Proposed 7pm instead')" }
           ],
           "actions": [
             { "task": "What needs to be done", "assignee": "Name or 'Unassigned'" }
@@ -145,8 +144,8 @@ async function generatePlanSummary(groupId: number) {
         }
 
         Be extremely strict with 'actions' - ONLY include items that were explicitly agreed upon or requested as tasks. Do not include vague discussion items.
-        Be extremely diligent in extracting 'reason'. If a user says 'I can't because X', 'reason' MUST be 'X'.
-        For 'rivalPlan', identify if there is a second popular option being discussed (different time or location) that hasn't been picked yet.
+        Be extremely diligent in extracting 'reason' for EACH person. If a user says 'I can't because X', 'reason' MUST be 'X'. If they propose an alternative, that is their 'reason'.
+        For 'rivalPlans', list EACH popular alternative being discussed as a separate object in the array.
         For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
       },
       {

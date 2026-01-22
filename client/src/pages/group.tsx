@@ -187,23 +187,27 @@ function PlanSidebar({
                       </div>
                     </div>
 
-                    {/* Rival Plan */}
-                    {data.rivalPlan && (
-                      <div className="relative group">
-                        <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
-                        <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">
-                              <Split className="w-3.5 h-3.5" /> Alternative Option
+                    {/* Rival Plans */}
+                    {data.rivalPlans?.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest px-1">
+                          <Split className="w-3.5 h-3.5" /> Alternative Options
+                        </div>
+                        <div className="space-y-3">
+                          {data.rivalPlans.map((plan: any, i: number) => (
+                            <div key={i} className="relative group">
+                              <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
+                              <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="text-sm font-bold text-foreground">{plan.title}</div>
+                                  <Badge variant="outline" className="text-[9px] bg-amber-500/5 border-amber-500/20 text-amber-600">PROPOSED</Badge>
+                                </div>
+                                <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                                  <p className="text-xs text-muted-foreground leading-relaxed">{plan.details}</p>
+                                </div>
+                              </div>
                             </div>
-                            <Badge variant="outline" className="text-[9px] bg-amber-500/5 border-amber-500/20 text-amber-600">PROPOSED</Badge>
-                          </div>
-                          <div className="space-y-3">
-                            <div className="text-sm font-bold text-foreground">{data.rivalPlan.title}</div>
-                            <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
-                              <p className="text-xs text-muted-foreground leading-relaxed">{data.rivalPlan.details}</p>
-                            </div>
-                          </div>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -222,9 +226,17 @@ function PlanSidebar({
                             </div>
                             <div className="flex flex-wrap gap-1.5">
                               {data.who.filter((p: any) => p.status === 'can_make_it').map((p: any) => (
-                                <Badge key={p.name} variant="secondary" className="bg-green-50 text-green-700 border-green-100 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800/30 rounded-lg py-0.5 px-2.5">
-                                  {p.name}
-                                </Badge>
+                                <Popover key={p.name}>
+                                  <PopoverTrigger asChild>
+                                    <Badge variant="secondary" className="bg-green-50 text-green-700 border-green-100 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800/30 rounded-lg py-0.5 px-2.5 cursor-pointer hover-elevate">
+                                      {p.name}
+                                    </Badge>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-60 p-3 text-xs bg-card border-green-100 shadow-xl" side="top">
+                                    <div className="font-bold mb-1 text-green-600">{p.name}</div>
+                                    <p className="text-muted-foreground leading-relaxed">{p.reason || "Confirmed attendance"}</p>
+                                  </PopoverContent>
+                                </Popover>
                               ))}
                             </div>
                           </div>

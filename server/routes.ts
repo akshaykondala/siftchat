@@ -120,33 +120,34 @@ async function generatePlanSummary(groupId: number) {
 
   // 3. Call OpenAI
   const response = await openai.chat.completions.create({
-    model: "gpt-4o", // Using a capable model for reasoning
+    model: "gpt-4o",
     messages: [
       {
         role: "system",
         content: `You are an event planning assistant. 
         Your goal is to read the chat log and extract the current agreed-upon details for the event.
         
-        Focus on:
-        - What (Event type)
-        - When (Date and Time)
-        - Where (Location)
-        - Who (Attendees status)
-        - Action Items (What needs to be done)
+        Output a JSON object with the following structure:
+        {
+          "what": "Brief event name",
+          "when": "Agreed time/date or 'Undecided'",
+          "where": "Location or 'Undecided'",
+          "who": ["List of confirmed/discussed attendees"],
+          "actions": ["What needs to be done"]
+        }
 
-        Output a clean, formatted summary (Markdown supported). 
-        If there are conflicts (e.g. multiple times proposed but not agreed), clearly state "Undecided" or list the options being discussed.
-        Keep it concise and helpful.`
+        Be extremely concise. If something is unknown, say 'Undecided'.`
       },
       {
         role: "user",
         content: `Chat Log:\n${chatLog}`
       }
     ],
-    temperature: 0.5,
+    response_format: { type: "json_object" },
+    temperature: 0.2,
   });
 
-  const summary = response.choices[0].message.content || "Could not generate summary.";
+  const summary = response.choices[0].message.content || "{}";
 
   // 4. Save to DB
   return storage.updatePlan(groupId, summary);

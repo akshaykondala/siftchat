@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
 import { 
   Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
-  Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle 
+  Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
+  CheckCircle2, Info
 } from "lucide-react";
 import { format } from "date-fns";
 import { ShinyCard } from "@/components/ui/shiny-card";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
@@ -139,17 +141,64 @@ function PlanSidebar({
                 <Loader2 className="w-6 h-6 animate-spin" />
                 <span className="text-sm">Analyzing chat...</span>
               </div>
-            ) : plan ? (
-              <div className="prose prose-sm prose-purple max-w-none">
-                 {/* 
-                    We could parse the AI summary better if it returned JSON, 
-                    but for now assuming it returns markdown text 
-                 */}
-                 <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 font-medium">
-                   {plan}
-                 </div>
-              </div>
-            ) : (
+            ) : plan ? (() => {
+              try {
+                const data = JSON.parse(plan);
+                return (
+                  <div className="space-y-6 animate-in-slide-up">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white/50 dark:bg-black/20 p-3 rounded-xl border border-primary/5">
+                        <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
+                          <Clock className="w-3 h-3" /> WHEN
+                        </div>
+                        <div className="text-sm font-semibold truncate">{data.when}</div>
+                      </div>
+                      <div className="bg-white/50 dark:bg-black/20 p-3 rounded-xl border border-primary/5">
+                        <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
+                          <MapPin className="w-3 h-3" /> WHERE
+                        </div>
+                        <div className="text-sm font-semibold truncate">{data.where}</div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground">
+                        <Users className="w-3 h-3" /> ATTENDEES
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {data.who?.map((name: string) => (
+                          <Badge key={name} variant="secondary" className="rounded-md font-medium text-[10px] px-2 py-0">
+                            {name}
+                          </Badge>
+                        )) || <span className="text-xs text-muted-foreground italic">None yet</span>}
+                      </div>
+                    </div>
+
+                    {data.actions?.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground">
+                          <CheckCircle2 className="w-3 h-3" /> TO-DO
+                        </div>
+                        <div className="space-y-1.5">
+                          {data.actions.map((action: string, i: number) => (
+                            <div key={i} className="flex items-start gap-2 text-xs text-foreground/80 bg-white/30 dark:bg-black/10 p-2 rounded-lg">
+                              <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 mt-1.5" />
+                              {action}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              } catch (e) {
+                return (
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 font-medium bg-white/40 p-4 rounded-xl border">
+                    {plan}
+                  </div>
+                );
+              }
+            })() : (
               <div className="flex flex-col items-center justify-center h-40 text-muted-foreground text-center p-4">
                 <MessageCircle className="w-8 h-8 mb-2 opacity-50" />
                 <p className="text-sm">Start chatting to generate a plan!</p>
@@ -237,7 +286,7 @@ export default function GroupPage() {
   }
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden relative">
+    <div className="flex h-screen bg-background overflow-hidden relative pt-[env(safe-area-inset-top)]">
       
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col h-full relative">

@@ -144,8 +144,9 @@ async function generatePlanSummary(groupId: number) {
           ]
         }
 
+        Be extremely strict with 'actions' - ONLY include items that were explicitly agreed upon or requested as tasks. Do not include vague discussion items.
         Be extremely diligent in extracting 'reason'. If a user says 'I can't because X', 'reason' MUST be 'X'.
-        For 'rivalPlan', identify if there is a second popular option being discussed that hasn't been picked yet.
+        For 'rivalPlan', identify if there is a second popular option being discussed (different time or location) that hasn't been picked yet.
         For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
       },
       {

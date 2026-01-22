@@ -153,28 +153,58 @@ function PlanSidebar({
                 return (
                   <div className="space-y-6 animate-in-slide-up">
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-white/50 dark:bg-black/20 p-3 rounded-xl border border-primary/5">
+                      <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
                         <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
                           <Clock className="w-3 h-3" /> WHEN
                         </div>
-                        <div className="text-sm font-semibold truncate">{data.when}</div>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.when}</div>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
+                            <div className="font-bold mb-1 text-primary flex items-center gap-2">
+                              <Clock className="w-3 h-3" /> Event Time
+                            </div>
+                            <p className="text-muted-foreground leading-relaxed">{data.when}</p>
+                          </PopoverContent>
+                        </Popover>
                       </div>
-                      <div className="bg-white/50 dark:bg-black/20 p-3 rounded-xl border border-primary/5">
+                      <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
                         <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
                           <MapPin className="w-3 h-3" /> WHERE
                         </div>
-                        <div className="text-sm font-semibold truncate">{data.where}</div>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.where}</div>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
+                            <div className="font-bold mb-1 text-primary flex items-center gap-2">
+                              <MapPin className="w-3 h-3" /> Event Location
+                            </div>
+                            <p className="text-muted-foreground leading-relaxed">{data.where}</p>
+                          </PopoverContent>
+                        </Popover>
                       </div>
                     </div>
 
                     {/* Rival Plan */}
                     {data.rivalPlan && (
-                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 space-y-2">
-                        <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">
-                          <Split className="w-3.5 h-3.5" /> Popular Alternative
+                      <div className="relative group">
+                        <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
+                        <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">
+                              <Split className="w-3.5 h-3.5" /> Alternative Option
+                            </div>
+                            <Badge variant="outline" className="text-[9px] bg-amber-500/5 border-amber-500/20 text-amber-600">PROPOSED</Badge>
+                          </div>
+                          <div className="space-y-3">
+                            <div className="text-sm font-bold text-foreground">{data.rivalPlan.title}</div>
+                            <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                              <p className="text-xs text-muted-foreground leading-relaxed">{data.rivalPlan.details}</p>
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-sm font-bold text-amber-900 dark:text-amber-100">{data.rivalPlan.title}</div>
-                        <div className="text-xs text-amber-800/70 dark:text-amber-200/60 leading-relaxed">{data.rivalPlan.details}</div>
                       </div>
                     )}
 

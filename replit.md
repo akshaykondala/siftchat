@@ -37,6 +37,10 @@ The application has five core entities:
 - **Route Contracts**: API routes defined with Zod in `shared/routes.ts` for type-safe requests/responses
 - **Storage Interface**: `IStorage` interface in `server/storage.ts` abstracts database operations
 - **Polling for Real-time**: Messages poll every 3s, plans every 5s (simple approach vs WebSockets)
+- **Welcome Back Flow**: Returning users get a modal to continue as their saved identity or join as someone new
+  - Participant ID stored in localStorage per group (`evite_participant_${slug}`)
+  - Validated against participants list from group API response
+  - Participants are included in `/api/groups/:slug` response (not a separate endpoint)
 
 ### Replit AI Integrations
 Pre-configured OpenAI client modules exist in `server/replit_integrations/` for:

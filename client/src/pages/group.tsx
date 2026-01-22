@@ -186,47 +186,60 @@ function PlanSidebar({
               try {
                 const data = JSON.parse(plan);
                 
-                // Find the most-voted alternative
-                let mostVotedIndex = -1;
-                let mostVotes = 0;
-                (data.rivalPlans || []).forEach((_: any, i: number) => {
-                  const count = voteCounts[i] || 0;
-                  if (count > mostVotes) {
-                    mostVotes = count;
-                    mostVotedIndex = i;
-                  }
-                });
+                // Calculate popularity for each plan (supporters + votes)
+                const mainPlanPopularity = (data.mainPlanSupporters?.length || 0);
                 
-                // Determine what to show as main vs alternatives
-                const hasPopularAlternative = mostVotes > 0;
-                const mainPlan = hasPopularAlternative 
-                  ? { when: data.rivalPlans[mostVotedIndex].details, where: data.rivalPlans[mostVotedIndex].title }
-                  : { when: data.when, where: data.where };
+                // Calculate popularity for each alternative
+                const alternativePopularities = (data.rivalPlans || []).map((alt: any, i: number) => ({
+                  index: i,
+                  popularity: (alt.supporters?.length || 0) + (voteCounts[i] || 0),
+                  votes: voteCounts[i] || 0,
+                  plan: alt
+                }));
                 
-                // Build alternatives list: if we swapped, add original plan as alternative
-                const alternatives = hasPopularAlternative
-                  ? [
-                      { title: "Original Plan", details: `${data.when} at ${data.where}`, supporters: [], isOriginal: true, originalIndex: -1 },
-                      ...data.rivalPlans.filter((_: any, i: number) => i !== mostVotedIndex).map((p: any, i: number) => ({
-                        ...p,
-                        originalIndex: i < mostVotedIndex ? i : i + 1
-                      }))
-                    ]
-                  : (data.rivalPlans || []).map((p: any, i: number) => ({ ...p, originalIndex: i }));
+                // Find the most popular alternative
+                const mostPopularAlt = alternativePopularities.reduce((best: any, curr: any) => 
+                  curr.popularity > (best?.popularity || 0) ? curr : best, null);
+                
+                // Only swap if alternative is MORE popular than main plan
+                const shouldSwap = mostPopularAlt && mostPopularAlt.popularity > mainPlanPopularity;
+                const swappedIndex = shouldSwap ? mostPopularAlt.index : -1;
+                
+                // Build the display data
+                const displayWhen = shouldSwap ? mostPopularAlt.plan.when : data.when;
+                const displayWhere = shouldSwap ? mostPopularAlt.plan.where : data.where;
+                const displayPopularity = shouldSwap ? mostPopularAlt.popularity : mainPlanPopularity;
+                
+                // Build alternatives list
+                const alternatives = (data.rivalPlans || [])
+                  .map((p: any, i: number) => ({ 
+                    ...p, 
+                    originalIndex: i,
+                    isSwapped: i === swappedIndex
+                  }))
+                  .filter((p: any) => !p.isSwapped)
+                  .concat(shouldSwap ? [{
+                    title: "Original Suggestion",
+                    when: data.when,
+                    where: data.where,
+                    supporters: data.mainPlanSupporters || [],
+                    originalIndex: -1,
+                    isOriginal: true
+                  }] : []);
                 
                 return (
                   <div className="space-y-6 animate-in-slide-up">
                     {/* Main Plan with Most Popular indicator */}
                     <div className="relative">
-                      {(hasPopularAlternative || data.mainPlanIsPopular) && (
+                      {displayPopularity > 0 && (
                         <div className="absolute -top-2 -right-2 z-10">
                           <Badge className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white border-0 shadow-md text-[9px] px-2 gap-1">
-                            <Crown className="w-2.5 h-2.5" /> Most Popular
+                            <Crown className="w-2.5 h-2.5" /> {displayPopularity} supporter{displayPopularity !== 1 ? 's' : ''}
                           </Badge>
                         </div>
                       )}
                       {/* Unvote button when main plan is a voted alternative */}
-                      {hasPopularAlternative && myVote?.alternativeIndex === mostVotedIndex && (
+                      {shouldSwap && myVote?.alternativeIndex === swappedIndex && (
                         <div className="mb-3">
                           <Button
                             variant="outline"
@@ -241,8 +254,16 @@ function PlanSidebar({
                             ) : (
                               <ThumbsUp className="w-3 h-3" />
                             )}
-                            {mostVotes} Voted - Click to Remove
+                            Your vote - Click to Remove
                           </Button>
+                        </div>
+                      )}
+                      {/* Show source indicator when displaying voted alternative */}
+                      {shouldSwap && (
+                        <div className="mb-2 px-1">
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
+                            <ThumbsUp className="w-3 h-3" /> Based on popular vote
+                          </span>
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-3">
@@ -253,21 +274,14 @@ function PlanSidebar({
                           <Popover>
                             <PopoverTrigger asChild>
                               <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">
-                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].details : data.when}
+                                {displayWhen}
                               </div>
                             </PopoverTrigger>
                             <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
                               <div className="font-bold mb-1 text-primary flex items-center gap-2">
                                 <Clock className="w-3 h-3" /> Event Time
                               </div>
-                              <p className="text-muted-foreground leading-relaxed">
-                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].details : data.when}
-                              </p>
-                              {hasPopularAlternative && (
-                                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
-                                  <ThumbsUp className="w-3 h-3" /> {mostVotes} vote{mostVotes !== 1 ? 's' : ''}
-                                </p>
-                              )}
+                              <p className="text-muted-foreground leading-relaxed">{displayWhen}</p>
                             </PopoverContent>
                           </Popover>
                         </div>
@@ -278,21 +292,14 @@ function PlanSidebar({
                           <Popover>
                             <PopoverTrigger asChild>
                               <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">
-                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].title : data.where}
+                                {displayWhere}
                               </div>
                             </PopoverTrigger>
                             <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
                               <div className="font-bold mb-1 text-primary flex items-center gap-2">
                                 <MapPin className="w-3 h-3" /> Event Location
                               </div>
-                              <p className="text-muted-foreground leading-relaxed">
-                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].title : data.where}
-                              </p>
-                              {hasPopularAlternative && (
-                                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
-                                  <ThumbsUp className="w-3 h-3" /> {mostVotes} vote{mostVotes !== 1 ? 's' : ''}
-                                </p>
-                              )}
+                              <p className="text-muted-foreground leading-relaxed">{displayWhere}</p>
                             </PopoverContent>
                           </Popover>
                         </div>
@@ -339,18 +346,34 @@ function PlanSidebar({
                                       </Button>
                                     )}
                                   </div>
-                                  <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
-                                    <p className="text-xs text-muted-foreground leading-relaxed">{alt.details}</p>
+                                  <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10 space-y-1">
+                                    {alt.when && (
+                                      <p className="text-xs text-muted-foreground leading-relaxed flex items-center gap-1">
+                                        <Clock className="w-3 h-3 text-primary/60" /> <span className="font-medium">{alt.when}</span>
+                                      </p>
+                                    )}
+                                    {alt.where && (
+                                      <p className="text-xs text-muted-foreground leading-relaxed flex items-center gap-1">
+                                        <MapPin className="w-3 h-3 text-primary/60" /> <span className="font-medium">{alt.where}</span>
+                                      </p>
+                                    )}
                                   </div>
-                                  {/* Supporters from AI */}
-                                  {alt.supporters?.length > 0 && (
+                                  {/* Supporters from AI + vote count */}
+                                  {(alt.supporters?.length > 0 || voteCount > 0) && (
                                     <div className="mt-3 flex items-center gap-2 flex-wrap">
-                                      <span className="text-[10px] text-muted-foreground font-medium">Supporters:</span>
-                                      {alt.supporters.map((name: string) => (
+                                      <span className="text-[10px] text-muted-foreground font-medium">
+                                        {(alt.supporters?.length || 0) + voteCount} supporter{(alt.supporters?.length || 0) + voteCount !== 1 ? 's' : ''}:
+                                      </span>
+                                      {alt.supporters?.map((name: string) => (
                                         <Badge key={name} variant="outline" className="text-[9px] bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
                                           {name}
                                         </Badge>
                                       ))}
+                                      {voteCount > 0 && (
+                                        <Badge variant="outline" className="text-[9px] bg-amber-100 dark:bg-amber-800/30 border-amber-300 dark:border-amber-700">
+                                          +{voteCount} vote{voteCount !== 1 ? 's' : ''}
+                                        </Badge>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -530,15 +553,14 @@ export default function GroupPage() {
   const [messageText, setMessageText] = useState("");
   const [participantId, setParticipantId] = useState<number | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [forceShowJoin, setForceShowJoin] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load participant ID from local storage on mount
-  useEffect(() => {
-    if (slug) {
-      const stored = localStorage.getItem(`evite_participant_${slug}`);
-      if (stored) setParticipantId(Number(stored));
-    }
-  }, [slug]);
+  // Check localStorage for existing participant ID
+  const storedParticipantId = slug ? localStorage.getItem(`evite_participant_${slug}`) : null;
+  
+  // Participants are included in the group response
+  const participants = group?.participants;
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -550,9 +572,21 @@ export default function GroupPage() {
       const participant = await joinGroup.mutateAsync({ slug, name });
       localStorage.setItem(`evite_participant_${slug}`, String(participant.id));
       setParticipantId(participant.id);
+      setForceShowJoin(false);
     } catch (e) {
       // Error handled in hook
     }
+  };
+  
+  const handleContinueAsExisting = () => {
+    if (storedParticipantId) {
+      setParticipantId(Number(storedParticipantId));
+    }
+  };
+  
+  const handleJoinAsNew = () => {
+    localStorage.removeItem(`evite_participant_${slug}`);
+    setForceShowJoin(true);
   };
 
   const handleSend = async (e: React.FormEvent) => {
@@ -581,6 +615,52 @@ export default function GroupPage() {
     return <div className="h-screen flex items-center justify-center text-destructive">Group not found</div>;
   }
 
+  // Check if stored participant exists in loaded participants
+  // Since participants are included in group response, they're available when group loads
+  const validStoredParticipant = storedParticipantId && participants 
+    ? participants.find(p => p.id === Number(storedParticipantId))
+    : null;
+
+  // Show welcome back choice if we have a valid stored participant
+  if (validStoredParticipant && !participantId && !forceShowJoin) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-indigo-50 flex items-center justify-center p-4">
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="bg-white rounded-3xl p-8 shadow-2xl border border-primary/10 w-full max-w-md text-center"
+        >
+          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-accent mx-auto mb-6 flex items-center justify-center">
+            <Users className="w-8 h-8 text-white" />
+          </div>
+          <h2 className="text-2xl font-bold font-display mb-2">Welcome Back!</h2>
+          <p className="text-muted-foreground mb-6">
+            You've been here before as <span className="font-semibold text-primary">{validStoredParticipant.name}</span>
+          </p>
+          
+          <div className="space-y-3">
+            <Button
+              className="w-full h-12 rounded-xl text-base"
+              onClick={handleContinueAsExisting}
+              data-testid="button-continue-as"
+            >
+              Continue as {validStoredParticipant.name}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full h-12 rounded-xl text-base"
+              onClick={handleJoinAsNew}
+              data-testid="button-join-as-new"
+            >
+              Join as someone else
+            </Button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Show join modal if no participant
   if (!participantId) {
     return <JoinModal groupName={group.name} onJoin={handleJoin} isLoading={joinGroup.isPending} />;
   }

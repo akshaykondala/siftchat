@@ -180,14 +180,19 @@ async function generatePlanSummary(groupId: number) {
         Output a JSON object with the following structure:
         {
           "what": "Brief event name",
-          "when": "Agreed time/date or 'Undecided' - pick the MOST POPULAR option discussed",
-          "where": "Location or 'Undecided' - pick the MOST POPULAR option discussed",
-          "mainPlanIsPopular": true/false (whether the main when/where has clear consensus),
+          "when": "TIME/DATE ONLY - e.g. '7pm Friday' or 'Saturday at noon'. NO location info here. Use 'Undecided' if unclear.",
+          "where": "LOCATION ONLY - e.g. 'Italian Restaurant' or 'Central Park'. NO time info here. Use 'Undecided' if unclear.",
+          "mainPlanSupporters": ["Names of people who support the main when/where"],
           "rivalPlans": [
-            { "title": "Alternative Option Title", "details": "When/Where details", "supporters": ["Names of people who suggested or prefer this"] }
+            { 
+              "title": "Short descriptive name (e.g. 'Thai Place Option')", 
+              "when": "TIME/DATE for this alternative",
+              "where": "LOCATION for this alternative",
+              "supporters": ["Names of people who suggested or prefer this"]
+            }
           ],
           "who": [
-            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "MUST specify the exact reason if provided in chat (e.g., 'Working late', 'Too far', 'Proposed 7pm instead')" }
+            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "Reason if provided" }
           ],
           "actions": [
             { "task": "What needs to be done", "assignee": "Name or 'Unassigned'" }
@@ -195,11 +200,18 @@ async function generatePlanSummary(groupId: number) {
         }
 
         CRITICAL RULES:
-        1. ANYONE who PROPOSES a time or place should be marked as "can_make_it" because they wouldn't suggest something they can't attend. This applies to BOTH the main plan AND alternatives.
-        2. Be extremely strict with 'actions' - ONLY include items that were explicitly agreed upon or requested as tasks. Do not include vague discussion items.
-        3. Be extremely diligent in extracting 'reason' for EACH person. If a user says 'I can't because X', 'reason' MUST be 'X'. If they propose an alternative, that is their 'reason'.
-        4. For 'rivalPlans', list EACH popular alternative being discussed. Include the names of supporters who proposed or explicitly prefer each alternative.
-        5. For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
+        1. WHEN = time/date ONLY. WHERE = location ONLY. NEVER mix them. Keep them clean and separate.
+        2. FAVOR "undecided" STATUS: Only mark someone as "cannot_make_it" if they EXPLICITLY say they are BUSY, UNAVAILABLE, or CANNOT ATTEND at that time. Examples:
+           - "I'm working that day" = cannot_make_it
+           - "I have plans" = cannot_make_it  
+           - "I don't like that place" = undecided (they CAN go, just prefer not to)
+           - "I prefer somewhere else" = undecided
+           - "That time doesn't work for me" = cannot_make_it (explicit unavailability)
+           - "I'd rather do 8pm" = undecided (preference, not unavailability)
+        3. ANYONE who PROPOSES a time or place should be marked as "can_make_it" for that option.
+        4. Count supporters accurately. If 3 people discuss and 2 agree on a plan, those 2 are supporters.
+        5. Be extremely strict with 'actions' - ONLY include items explicitly agreed upon as tasks.
+        6. For rivalPlans, each alternative must have separate when/where fields, not mixed together.`
       },
       {
         role: "user",

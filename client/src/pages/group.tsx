@@ -210,6 +210,41 @@ function PlanSidebar({
                 const displayWhere = shouldSwap ? mostPopularAlt.plan.where : data.where;
                 const displayPopularity = shouldSwap ? mostPopularAlt.popularity : mainPlanPopularity;
                 
+                // Adjust attendees when displaying a swapped alternative
+                // People who supported the NEW main plan are "going"
+                // People who only supported the ORIGINAL plan are "undecided" for this option
+                let displayWho = data.who || [];
+                if (shouldSwap && mostPopularAlt?.plan?.supporters) {
+                  const altSupporters = new Set(mostPopularAlt.plan.supporters.map((s: string) => s.toLowerCase().trim()));
+                  const existingNames = new Set((data.who || []).map((p: any) => p.name.toLowerCase().trim()));
+                  
+                  // First, update existing entries
+                  displayWho = (data.who || []).map((person: any) => {
+                    const personLower = person.name.toLowerCase().trim();
+                    // If this person supported the alternative (now main), mark as going
+                    if (altSupporters.has(personLower)) {
+                      return { ...person, status: 'can_make_it', reason: person.reason || 'Supported this option' };
+                    }
+                    // If person was "can_make_it" for the ORIGINAL plan but didn't support this alternative,
+                    // mark them as undecided for this new main plan (unless they explicitly can't make it)
+                    if (person.status === 'can_make_it') {
+                      return { ...person, status: 'undecided', reason: 'Has not confirmed for this option' };
+                    }
+                    // Keep cannot_make_it and undecided as-is
+                    return person;
+                  });
+                  
+                  // Then, add supporters who weren't in the original who array
+                  const missingSupporters = mostPopularAlt.plan.supporters
+                    .filter((s: string) => !existingNames.has(s.toLowerCase().trim()))
+                    .map((s: string) => ({
+                      name: s,
+                      status: 'can_make_it',
+                      reason: 'Supported this option'
+                    }));
+                  displayWho = [...displayWho, ...missingSupporters];
+                }
+                
                 // Build alternatives list
                 const alternatives = (data.rivalPlans || [])
                   .map((p: any, i: number) => ({ 
@@ -391,13 +426,13 @@ function PlanSidebar({
                       
                       <div className="space-y-4">
                         {/* Can Make It */}
-                        {data.who?.some((p: any) => p.status === 'can_make_it') && (
+                        {displayWho?.some((p: any) => p.status === 'can_make_it') && (
                           <div className="space-y-2">
                             <div className="text-[10px] font-bold text-green-600 dark:text-green-400 flex items-center gap-1.5 px-1">
                               <UserCheck className="w-3 h-3" /> GOING
                             </div>
                             <div className="flex flex-wrap gap-1.5">
-                              {data.who.filter((p: any) => p.status === 'can_make_it').map((p: any) => (
+                              {displayWho.filter((p: any) => p.status === 'can_make_it').map((p: any) => (
                                 <Popover key={p.name}>
                                   <PopoverTrigger asChild>
                                     <Badge variant="secondary" className="bg-green-50 text-green-700 border-green-100 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800/30 rounded-lg py-0.5 px-2.5 cursor-pointer hover-elevate">
@@ -415,13 +450,13 @@ function PlanSidebar({
                         )}
 
                         {/* Cannot Make It */}
-                        {data.who?.some((p: any) => p.status === 'cannot_make_it') && (
+                        {displayWho?.some((p: any) => p.status === 'cannot_make_it') && (
                           <div className="space-y-2">
                             <div className="text-[10px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5 px-1">
                               <UserMinus className="w-3 h-3" /> CAN'T MAKE IT
                             </div>
                             <div className="flex flex-wrap gap-1.5">
-                              {data.who.filter((p: any) => p.status === 'cannot_make_it').map((p: any) => (
+                              {displayWho.filter((p: any) => p.status === 'cannot_make_it').map((p: any) => (
                                 <Popover key={p.name}>
                                   <PopoverTrigger asChild>
                                     <Badge variant="secondary" className="bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800/30 rounded-lg py-0.5 px-2.5 cursor-help hover-elevate">
@@ -439,13 +474,13 @@ function PlanSidebar({
                         )}
 
                         {/* Undecided */}
-                        {data.who?.some((p: any) => p.status === 'undecided') && (
+                        {displayWho?.some((p: any) => p.status === 'undecided') && (
                           <div className="space-y-2">
                             <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5 px-1">
                               <HelpCircle className="w-3 h-3" /> UNDECIDED
                             </div>
                             <div className="flex flex-wrap gap-1.5">
-                              {data.who.filter((p: any) => p.status === 'undecided').map((p: any) => (
+                              {displayWho.filter((p: any) => p.status === 'undecided').map((p: any) => (
                                 <Popover key={p.name}>
                                   <PopoverTrigger asChild>
                                     <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800/30 rounded-lg py-0.5 px-2.5 cursor-help hover-elevate">

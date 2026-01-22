@@ -208,10 +208,12 @@ async function generatePlanSummary(groupId: number) {
            - "I prefer somewhere else" = undecided
            - "That time doesn't work for me" = cannot_make_it (explicit unavailability)
            - "I'd rather do 8pm" = undecided (preference, not unavailability)
-        3. ANYONE who PROPOSES a time or place should be marked as "can_make_it" for that option.
+        3. ANYONE who PROPOSES a time or place should be marked as "can_make_it" for THAT SPECIFIC option only.
         4. Count supporters accurately. If 3 people discuss and 2 agree on a plan, those 2 are supporters.
+        8. ATTENDANCE IS OPTION-SPECIFIC: The "who" array reflects attendance for the MAIN PLAN only. If someone supported a DIFFERENT option (in rivalPlans), they should be "undecided" in the main "who" array unless they ALSO explicitly agreed to the main plan. Do NOT assume someone who proposed Alternative A is attending the main plan - they may only want their alternative.
         5. Be extremely strict with 'actions' - ONLY include items explicitly agreed upon as tasks.
-        6. For rivalPlans, each alternative must have separate when/where fields, not mixed together.`
+        6. For rivalPlans, each alternative must have separate when/where fields, not mixed together.
+        7. ALTERNATIVES MUST BE SPECIFIC: An alternative (rivalPlan) must have at least a specific WHEN or a specific WHERE. Do NOT create alternatives where BOTH when AND where are "Undecided" - that's not a real alternative. Only include alternatives that propose something concrete.`
       },
       {
         role: "user",
@@ -224,6 +226,22 @@ async function generatePlanSummary(groupId: number) {
 
   const summary = response.choices[0].message.content || "{}";
 
+  // Post-process: Filter out alternatives that have BOTH when and where as "Undecided"
+  let planData;
+  try {
+    planData = JSON.parse(summary);
+    if (planData.rivalPlans && Array.isArray(planData.rivalPlans)) {
+      planData.rivalPlans = planData.rivalPlans.filter((alt: any) => {
+        const whenUndecided = !alt.when || alt.when.toLowerCase().includes('undecided');
+        const whereUndecided = !alt.where || alt.where.toLowerCase().includes('undecided');
+        // Keep if at least one is specific (not undecided)
+        return !(whenUndecided && whereUndecided);
+      });
+    }
+  } catch {
+    planData = {};
+  }
+
   // 4. Save to DB
-  return storage.updatePlan(groupId, summary);
+  return storage.updatePlan(groupId, JSON.stringify(planData));
 }

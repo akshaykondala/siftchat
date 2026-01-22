@@ -12,7 +12,7 @@ import {
   Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
   Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
   CheckCircle2, Info, UserCheck, UserMinus, HelpCircle,
-  Split, ClipboardCheck, User, ThumbsUp, Crown
+  Split, ClipboardCheck, User, ThumbsUp, Crown, Share2
 } from "lucide-react";
 import { format } from "date-fns";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -123,6 +123,78 @@ function PlanSidebar({
     toast({ title: "Link Copied", description: "Share it with your friends!" });
   };
 
+  const sharePlanToGC = () => {
+    try {
+      const data = JSON.parse(plan);
+      
+      // Calculate which plan is currently displayed (same logic as rendering)
+      const mainPlanPopularity = (data.mainPlanSupporters?.length || 0);
+      const alternativePopularities = (data.rivalPlans || []).map((alt: any, i: number) => ({
+        index: i,
+        popularity: (alt.supporters?.length || 0) + (voteCounts[i] || 0),
+        plan: alt
+      }));
+      const mostPopularAlt = alternativePopularities.reduce((best: any, curr: any) => 
+        curr.popularity > (best?.popularity || 0) ? curr : best, null);
+      const shouldSwap = mostPopularAlt && mostPopularAlt.popularity > mainPlanPopularity;
+      
+      const displayWhen = shouldSwap ? mostPopularAlt.plan.when : data.when;
+      const displayWhere = shouldSwap ? mostPopularAlt.plan.where : data.where;
+      
+      // Calculate displayWho (same logic as UI)
+      let displayWho = data.who || [];
+      if (shouldSwap && mostPopularAlt?.plan?.supporters) {
+        const altSupporters = new Set(mostPopularAlt.plan.supporters.map((s: string) => s.toLowerCase().trim()));
+        const existingNames = new Set((data.who || []).map((p: any) => p.name.toLowerCase().trim()));
+        
+        displayWho = (data.who || []).map((person: any) => {
+          const personLower = person.name.toLowerCase().trim();
+          if (altSupporters.has(personLower)) {
+            return { ...person, status: 'can_make_it' };
+          }
+          if (person.status === 'can_make_it') {
+            return { ...person, status: 'undecided' };
+          }
+          return person;
+        });
+        
+        const missingSupporters = mostPopularAlt.plan.supporters
+          .filter((s: string) => !existingNames.has(s.toLowerCase().trim()))
+          .map((s: string) => ({ name: s, status: 'can_make_it' }));
+        displayWho = [...displayWho, ...missingSupporters];
+      }
+      
+      // Build short message
+      let message = `${groupName}\n`;
+      
+      const isUndecided = (val: string) => !val || val.toLowerCase().includes('undecided');
+      
+      if (!isUndecided(displayWhen)) {
+        message += `${displayWhen}`;
+      }
+      if (!isUndecided(displayWhere)) {
+        message += !isUndecided(displayWhen) ? ` @ ${displayWhere}` : displayWhere;
+      }
+      if (isUndecided(displayWhen) && isUndecided(displayWhere)) {
+        message += `Still deciding on time & place`;
+      }
+      
+      // Add who's going (using displayWho)
+      const goingPeople = displayWho.filter((p: any) => p.status === 'can_make_it').map((p: any) => p.name);
+      if (goingPeople.length > 0) {
+        message += `\nGoing: ${goingPeople.join(', ')}`;
+      }
+      
+      // Add link
+      message += `\n\nJoin/vote: ${window.location.origin}/g/${slug}`;
+      
+      navigator.clipboard.writeText(message);
+      toast({ title: "Plan Copied", description: "Paste it in your group chat!" });
+    } catch {
+      toast({ title: "No plan yet", description: "Start chatting to generate a plan first!", variant: "destructive" });
+    }
+  };
+
   return (
     <>
       {/* Mobile Overlay */}
@@ -158,9 +230,14 @@ function PlanSidebar({
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="space-y-4">
             <h3 className="text-2xl font-bold font-display">{groupName}</h3>
-            <Button variant="outline" className="w-full gap-2 rounded-xl" onClick={copyLink}>
-              <Copy className="w-4 h-4" /> Copy Invite Link
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1 gap-2 rounded-xl" onClick={copyLink}>
+                <Copy className="w-4 h-4" /> Invite Link
+              </Button>
+              <Button variant="outline" className="flex-1 gap-2 rounded-xl" onClick={sharePlanToGC} data-testid="button-share-plan">
+                <Share2 className="w-4 h-4" /> Share Plan
+              </Button>
+            </div>
           </div>
 
           <div className="bg-gradient-to-br from-primary/5 to-accent/10 rounded-2xl p-6 border border-primary/10">

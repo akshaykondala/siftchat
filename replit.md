@@ -41,6 +41,9 @@ The application has five core entities:
   - Participant ID stored in localStorage per group (`evite_participant_${slug}`)
   - Validated against participants list from group API response
   - Participants are included in `/api/groups/:slug` response (not a separate endpoint)
+- **Share Plan to Group Chat**: "Share Plan" button copies a text-message-friendly summary:
+  - Includes group name, when/where, who's going, and invite link
+  - Respects the displayed plan (if a voted alternative becomes main, it shares that plan's info)
 
 ### Replit AI Integrations
 Pre-configured OpenAI client modules exist in `server/replit_integrations/` for:

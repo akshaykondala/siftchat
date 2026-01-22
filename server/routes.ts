@@ -1,16 +1,153 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { api } from "@shared/routes";
+import { z } from "zod";
+import { openai } from "./replit_integrations/audio/client"; // Re-using the configured OpenAI client
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  // Groups
+  app.post(api.groups.create.path, async (req, res) => {
+    try {
+      const input = api.groups.create.input.parse(req.body);
+      const group = await storage.createGroup(input.name);
+      res.status(201).json(group);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.get(api.groups.get.path, async (req, res) => {
+    const group = await storage.getGroupBySlug(req.params.slug);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+    const participants = await storage.getParticipantsByGroup(group.id);
+    res.json({ ...group, participants });
+  });
+
+  app.post(api.groups.join.path, async (req, res) => {
+    const group = await storage.getGroupBySlug(req.params.slug);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+    try {
+      const input = api.groups.join.input.parse(req.body);
+      const participant = await storage.createParticipant(group.id, input.name);
+      res.status(201).json(participant);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // Messages
+  app.get(api.messages.list.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const messages = await storage.getMessagesByGroup(groupId);
+    res.json(messages);
+  });
+
+  app.post(api.messages.create.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const input = api.messages.create.input.parse(req.body);
+      // Verify participant belongs to group
+      const participant = await storage.getParticipant(input.participantId);
+      if (!participant || participant.groupId !== groupId) {
+        return res.status(403).json({ message: "Invalid participant" });
+      }
+
+      const message = await storage.createMessage(groupId, input.participantId, input.content);
+      
+      // OPTIONAL: Trigger background plan update (fire and forget)
+      // We don't await this so the message send is fast
+      generatePlanSummary(groupId).catch(console.error);
+
+      res.status(201).json(message);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // Plans
+  app.get(api.plans.get.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const plan = await storage.getPlanByGroup(groupId);
+    if (!plan) {
+      // If no plan exists, return empty or trigger generation
+      return res.status(404).json({ message: "No plan generated yet" });
+    }
+    res.json(plan);
+  });
+
+  app.post(api.plans.generate.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const plan = await generatePlanSummary(groupId);
+      res.json(plan);
+    } catch (err) {
+      console.error("Plan generation error:", err);
+      res.status(500).json({ message: "Failed to generate plan" });
+    }
+  });
 
   return httpServer;
+}
+
+async function generatePlanSummary(groupId: number) {
+  // 1. Get recent messages (e.g., last 50)
+  const messages = await storage.getMessagesByGroup(groupId);
+  
+  if (messages.length === 0) {
+    return storage.updatePlan(groupId, "No messages yet to summarize.");
+  }
+
+  // 2. Format for AI
+  const chatLog = messages.map(m => `${m.participantName}: ${m.content}`).join("\n");
+
+  // 3. Call OpenAI
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o", // Using a capable model for reasoning
+    messages: [
+      {
+        role: "system",
+        content: `You are an event planning assistant. 
+        Your goal is to read the chat log and extract the current agreed-upon details for the event.
+        
+        Focus on:
+        - What (Event type)
+        - When (Date and Time)
+        - Where (Location)
+        - Who (Attendees status)
+        - Action Items (What needs to be done)
+
+        Output a clean, formatted summary (Markdown supported). 
+        If there are conflicts (e.g. multiple times proposed but not agreed), clearly state "Undecided" or list the options being discussed.
+        Keep it concise and helpful.`
+      },
+      {
+        role: "user",
+        content: `Chat Log:\n${chatLog}`
+      }
+    ],
+    temperature: 0.5,
+  });
+
+  const summary = response.choices[0].message.content || "Could not generate summary.";
+
+  // 4. Save to DB
+  return storage.updatePlan(groupId, summary);
 }

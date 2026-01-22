@@ -1,38 +1,105 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
-
-// modify the interface with any CRUD methods
-// you might need
+import { db } from "./db";
+import { groups, participants, messages, plans, type Group, type Participant, type Message, type Plan } from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
+import { randomBytes } from "crypto";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  // Groups
+  createGroup(name: string): Promise<Group>;
+  getGroupBySlug(slug: string): Promise<Group | undefined>;
+  getGroupById(id: number): Promise<Group | undefined>;
+
+  // Participants
+  createParticipant(groupId: number, name: string): Promise<Participant>;
+  getParticipant(id: number): Promise<Participant | undefined>;
+  getParticipantsByGroup(groupId: number): Promise<Participant[]>;
+
+  // Messages
+  createMessage(groupId: number, participantId: number, content: string): Promise<Message>;
+  getMessagesByGroup(groupId: number): Promise<(Message & { participantName: string })[]>;
+
+  // Plans
+  getPlanByGroup(groupId: number): Promise<Plan | undefined>;
+  updatePlan(groupId: number, summary: string): Promise<Plan>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-
-  constructor() {
-    this.users = new Map();
+export class DatabaseStorage implements IStorage {
+  async createGroup(name: string): Promise<Group> {
+    // Generate a simple slug
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + randomBytes(3).toString('hex');
+    const [group] = await db.insert(groups).values({ name, shareLinkSlug: slug }).returning();
+    return group;
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async getGroupBySlug(slug: string): Promise<Group | undefined> {
+    const [group] = await db.select().from(groups).where(eq(groups.shareLinkSlug, slug));
+    return group;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+  async getGroupById(id: number): Promise<Group | undefined> {
+    const [group] = await db.select().from(groups).where(eq(groups.id, id));
+    return group;
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async createParticipant(groupId: number, name: string): Promise<Participant> {
+    const [participant] = await db.insert(participants).values({ groupId, name }).returning();
+    return participant;
+  }
+
+  async getParticipant(id: number): Promise<Participant | undefined> {
+    const [participant] = await db.select().from(participants).where(eq(participants.id, id));
+    return participant;
+  }
+
+  async getParticipantsByGroup(groupId: number): Promise<Participant[]> {
+    return db.select().from(participants).where(eq(participants.groupId, groupId));
+  }
+
+  async createMessage(groupId: number, participantId: number, content: string): Promise<Message> {
+    const [message] = await db.insert(messages).values({ groupId, participantId, content }).returning();
+    return message;
+  }
+
+  async getMessagesByGroup(groupId: number): Promise<(Message & { participantName: string })[]> {
+    const result = await db
+      .select({
+        id: messages.id,
+        groupId: messages.groupId,
+        participantId: messages.participantId,
+        content: messages.content,
+        createdAt: messages.createdAt,
+        participantName: participants.name,
+      })
+      .from(messages)
+      .innerJoin(participants, eq(messages.participantId, participants.id))
+      .where(eq(messages.groupId, groupId))
+      .orderBy(messages.createdAt);
+    return result;
+  }
+
+  async getPlanByGroup(groupId: number): Promise<Plan | undefined> {
+    const [plan] = await db.select().from(plans).where(eq(plans.groupId, groupId));
+    return plan;
+  }
+
+  async updatePlan(groupId: number, summary: string): Promise<Plan> {
+    // Check if plan exists
+    const existing = await this.getPlanByGroup(groupId);
+    if (existing) {
+      const [updated] = await db
+        .update(plans)
+        .set({ summary, lastUpdatedAt: new Date() })
+        .where(eq(plans.groupId, groupId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db
+        .insert(plans)
+        .values({ groupId, summary })
+        .returning();
+      return created;
+    }
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

@@ -104,6 +104,43 @@ export async function registerRoutes(
     }
   });
 
+  // Votes
+  app.get("/api/groups/:groupId/votes", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const votes = await storage.getVotesByGroup(groupId);
+    res.json(votes);
+  });
+
+  app.post("/api/groups/:groupId/votes", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const { participantId, alternativeIndex } = req.body;
+      if (typeof participantId !== "number" || typeof alternativeIndex !== "number") {
+        return res.status(400).json({ message: "participantId and alternativeIndex required" });
+      }
+      const vote = await storage.addVote(groupId, participantId, alternativeIndex);
+      res.status(201).json(vote);
+    } catch (err) {
+      console.error("Vote error:", err);
+      res.status(500).json({ message: "Failed to record vote" });
+    }
+  });
+
+  app.delete("/api/groups/:groupId/votes", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const { participantId } = req.body;
+      if (typeof participantId !== "number") {
+        return res.status(400).json({ message: "participantId required" });
+      }
+      await storage.removeVote(groupId, participantId);
+      res.status(204).send();
+    } catch (err) {
+      console.error("Vote removal error:", err);
+      res.status(500).json({ message: "Failed to remove vote" });
+    }
+  });
+
   return httpServer;
 }
 
@@ -130,10 +167,11 @@ async function generatePlanSummary(groupId: number) {
         Output a JSON object with the following structure:
         {
           "what": "Brief event name",
-          "when": "Agreed time/date or 'Undecided'",
-          "where": "Location or 'Undecided'",
+          "when": "Agreed time/date or 'Undecided' - pick the MOST POPULAR option discussed",
+          "where": "Location or 'Undecided' - pick the MOST POPULAR option discussed",
+          "mainPlanIsPopular": true/false (whether the main when/where has clear consensus),
           "rivalPlans": [
-            { "title": "Alternative Option Title", "details": "When/Where details for this option" }
+            { "title": "Alternative Option Title", "details": "When/Where details", "supporters": ["Names of people who suggested or prefer this"] }
           ],
           "who": [
             { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "MUST specify the exact reason if provided in chat (e.g., 'Working late', 'Too far', 'Proposed 7pm instead')" }
@@ -145,7 +183,7 @@ async function generatePlanSummary(groupId: number) {
 
         Be extremely strict with 'actions' - ONLY include items that were explicitly agreed upon or requested as tasks. Do not include vague discussion items.
         Be extremely diligent in extracting 'reason' for EACH person. If a user says 'I can't because X', 'reason' MUST be 'X'. If they propose an alternative, that is their 'reason'.
-        For 'rivalPlans', list EACH popular alternative being discussed as a separate object in the array.
+        For 'rivalPlans', list EACH popular alternative being discussed. Include the names of supporters who proposed or explicitly prefer each alternative.
         For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
       },
       {

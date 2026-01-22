@@ -132,11 +132,13 @@ async function generatePlanSummary(groupId: number) {
           "what": "Brief event name",
           "when": "Agreed time/date or 'Undecided'",
           "where": "Location or 'Undecided'",
-          "who": ["List of confirmed/discussed attendees"],
+          "who": [
+            { "name": "Name", "status": "can_make_it" | "cannot_make_it" | "undecided", "reason": "Why they can't or their proposed alternative if any" }
+          ],
           "actions": ["What needs to be done"]
         }
 
-        Be extremely concise. If something is unknown, say 'Undecided'.`
+        Be extremely concise. For 'who', analyze the chat to see who confirmed, who declined (and why), and who is still silent or undecided.`
       },
       {
         role: "user",

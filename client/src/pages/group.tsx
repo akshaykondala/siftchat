@@ -8,12 +8,17 @@ import { Input } from "@/components/ui/input";
 import { 
   Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
   Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
-  CheckCircle2, Info
+  CheckCircle2, Info, UserCheck, UserMinus, HelpCircle
 } from "lucide-react";
 import { format } from "date-fns";
 import { ShinyCard } from "@/components/ui/shiny-card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -161,16 +166,75 @@ function PlanSidebar({
                       </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground">
-                        <Users className="w-3 h-3" /> ATTENDEES
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                        <Users className="w-3 h-3" /> Attendees
                       </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {data.who?.map((name: string) => (
-                          <Badge key={name} variant="secondary" className="rounded-md font-medium text-[10px] px-2 py-0">
-                            {name}
-                          </Badge>
-                        )) || <span className="text-xs text-muted-foreground italic">None yet</span>}
+                      
+                      <div className="space-y-4">
+                        {/* Can Make It */}
+                        {data.who?.some((p: any) => p.status === 'can_make_it') && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] font-bold text-green-600 dark:text-green-400 flex items-center gap-1.5 px-1">
+                              <UserCheck className="w-3 h-3" /> GOING
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {data.who.filter((p: any) => p.status === 'can_make_it').map((p: any) => (
+                                <Badge key={p.name} variant="secondary" className="bg-green-50 text-green-700 border-green-100 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800/30 rounded-lg py-0.5 px-2.5">
+                                  {p.name}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Cannot Make It */}
+                        {data.who?.some((p: any) => p.status === 'cannot_make_it') && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5 px-1">
+                              <UserMinus className="w-3 h-3" /> CAN'T MAKE IT
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {data.who.filter((p: any) => p.status === 'cannot_make_it').map((p: any) => (
+                                <Popover key={p.name}>
+                                  <PopoverTrigger asChild>
+                                    <Badge variant="secondary" className="bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800/30 rounded-lg py-0.5 px-2.5 cursor-help hover-elevate">
+                                      {p.name}
+                                    </Badge>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-60 p-3 text-xs bg-card border-red-100 shadow-xl" side="top">
+                                    <div className="font-bold mb-1 text-red-600">{p.name}'s Reason</div>
+                                    <p className="text-muted-foreground leading-relaxed">{p.reason || "No reason specified"}</p>
+                                  </PopoverContent>
+                                </Popover>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Undecided */}
+                        {data.who?.some((p: any) => p.status === 'undecided') && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5 px-1">
+                              <HelpCircle className="w-3 h-3" /> UNDECIDED
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {data.who.filter((p: any) => p.status === 'undecided').map((p: any) => (
+                                <Popover key={p.name}>
+                                  <PopoverTrigger asChild>
+                                    <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800/30 rounded-lg py-0.5 px-2.5 cursor-help hover-elevate">
+                                      {p.name}
+                                    </Badge>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-60 p-3 text-xs bg-card border-amber-100 shadow-xl" side="top">
+                                    <div className="font-bold mb-1 text-amber-600">{p.name}'s Input</div>
+                                    <p className="text-muted-foreground leading-relaxed">{p.reason || "Hasn't confirmed yet"}</p>
+                                  </PopoverContent>
+                                </Popover>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 

@@ -25,11 +25,12 @@ Preferred communication style: Simple, everyday language.
 - **Build Process**: ESBuild for server bundling, Vite for client bundling
 
 ### Data Model
-The application has four core entities:
+The application has five core entities:
 1. **Groups** - Event containers with unique shareable slug URLs
 2. **Participants** - Users who join groups (stored in localStorage per group)
 3. **Messages** - Chat messages within groups
 4. **Plans** - AI-generated summaries of group conversations (one per group)
+5. **PlanVotes** - User votes on alternative event options (one vote per participant per group)
 
 ### Key Design Patterns
 - **Shared Types**: Schema definitions in `shared/schema.ts` used by both client and server

@@ -34,6 +34,14 @@ export const plans = pgTable("plans", {
   lastUpdatedAt: timestamp("last_updated_at").defaultNow(),
 });
 
+export const planVotes = pgTable("plan_votes", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  participantId: integer("participant_id").notNull(),
+  alternativeIndex: integer("alternative_index").notNull(), // Which alternative they voted for (0, 1, 2...)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // === RELATIONS ===
 
 export const groupsRelations = relations(groups, ({ many, one }) => ({
@@ -83,6 +91,7 @@ export type Group = typeof groups.$inferSelect;
 export type Participant = typeof participants.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Plan = typeof plans.$inferSelect;
+export type PlanVote = typeof planVotes.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
 export type JoinGroupRequest = { name: string }; // Participant name

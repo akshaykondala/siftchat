@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { groups, participants, messages, plans, type Group, type Participant, type Message, type Plan } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
+import { groups, participants, messages, plans, planVotes, type Group, type Participant, type Message, type Plan, type PlanVote } from "@shared/schema";
+import { eq, desc, and } from "drizzle-orm";
 import { randomBytes } from "crypto";
 
 export interface IStorage {
@@ -21,6 +21,11 @@ export interface IStorage {
   // Plans
   getPlanByGroup(groupId: number): Promise<Plan | undefined>;
   updatePlan(groupId: number, summary: string): Promise<Plan>;
+
+  // Votes
+  getVotesByGroup(groupId: number): Promise<PlanVote[]>;
+  addVote(groupId: number, participantId: number, alternativeIndex: number): Promise<PlanVote>;
+  removeVote(groupId: number, participantId: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -99,6 +104,23 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return created;
     }
+  }
+
+  async getVotesByGroup(groupId: number): Promise<PlanVote[]> {
+    return db.select().from(planVotes).where(eq(planVotes.groupId, groupId));
+  }
+
+  async addVote(groupId: number, participantId: number, alternativeIndex: number): Promise<PlanVote> {
+    // Remove existing vote first (one vote per participant)
+    await this.removeVote(groupId, participantId);
+    const [vote] = await db.insert(planVotes).values({ groupId, participantId, alternativeIndex }).returning();
+    return vote;
+  }
+
+  async removeVote(groupId: number, participantId: number): Promise<void> {
+    await db.delete(planVotes).where(
+      and(eq(planVotes.groupId, groupId), eq(planVotes.participantId, participantId))
+    );
   }
 }
 

@@ -185,15 +185,64 @@ function PlanSidebar({
             ) : plan ? (() => {
               try {
                 const data = JSON.parse(plan);
+                
+                // Find the most-voted alternative
+                let mostVotedIndex = -1;
+                let mostVotes = 0;
+                (data.rivalPlans || []).forEach((_: any, i: number) => {
+                  const count = voteCounts[i] || 0;
+                  if (count > mostVotes) {
+                    mostVotes = count;
+                    mostVotedIndex = i;
+                  }
+                });
+                
+                // Determine what to show as main vs alternatives
+                const hasPopularAlternative = mostVotes > 0;
+                const mainPlan = hasPopularAlternative 
+                  ? { when: data.rivalPlans[mostVotedIndex].details, where: data.rivalPlans[mostVotedIndex].title }
+                  : { when: data.when, where: data.where };
+                
+                // Build alternatives list: if we swapped, add original plan as alternative
+                const alternatives = hasPopularAlternative
+                  ? [
+                      { title: "Original Plan", details: `${data.when} at ${data.where}`, supporters: [], isOriginal: true, originalIndex: -1 },
+                      ...data.rivalPlans.filter((_: any, i: number) => i !== mostVotedIndex).map((p: any, i: number) => ({
+                        ...p,
+                        originalIndex: i < mostVotedIndex ? i : i + 1
+                      }))
+                    ]
+                  : (data.rivalPlans || []).map((p: any, i: number) => ({ ...p, originalIndex: i }));
+                
                 return (
                   <div className="space-y-6 animate-in-slide-up">
                     {/* Main Plan with Most Popular indicator */}
                     <div className="relative">
-                      {data.mainPlanIsPopular && (
+                      {(hasPopularAlternative || data.mainPlanIsPopular) && (
                         <div className="absolute -top-2 -right-2 z-10">
                           <Badge className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white border-0 shadow-md text-[9px] px-2 gap-1">
                             <Crown className="w-2.5 h-2.5" /> Most Popular
                           </Badge>
+                        </div>
+                      )}
+                      {/* Unvote button when main plan is a voted alternative */}
+                      {hasPopularAlternative && myVote?.alternativeIndex === mostVotedIndex && (
+                        <div className="mb-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full h-7 gap-1.5 text-xs bg-amber-500 hover:bg-amber-600 text-white border-amber-500"
+                            onClick={handleRemoveVote}
+                            disabled={votingIndex !== null}
+                            data-testid="button-unvote-main"
+                          >
+                            {votingIndex === -1 ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <ThumbsUp className="w-3 h-3" />
+                            )}
+                            {mostVotes} Voted - Click to Remove
+                          </Button>
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-3">
@@ -203,13 +252,22 @@ function PlanSidebar({
                           </div>
                           <Popover>
                             <PopoverTrigger asChild>
-                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.when}</div>
+                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">
+                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].details : data.when}
+                              </div>
                             </PopoverTrigger>
                             <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
                               <div className="font-bold mb-1 text-primary flex items-center gap-2">
                                 <Clock className="w-3 h-3" /> Event Time
                               </div>
-                              <p className="text-muted-foreground leading-relaxed">{data.when}</p>
+                              <p className="text-muted-foreground leading-relaxed">
+                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].details : data.when}
+                              </p>
+                              {hasPopularAlternative && (
+                                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                                  <ThumbsUp className="w-3 h-3" /> {mostVotes} vote{mostVotes !== 1 ? 's' : ''}
+                                </p>
+                              )}
                             </PopoverContent>
                           </Popover>
                         </div>
@@ -219,13 +277,22 @@ function PlanSidebar({
                           </div>
                           <Popover>
                             <PopoverTrigger asChild>
-                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">{data.where}</div>
+                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">
+                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].title : data.where}
+                              </div>
                             </PopoverTrigger>
                             <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
                               <div className="font-bold mb-1 text-primary flex items-center gap-2">
                                 <MapPin className="w-3 h-3" /> Event Location
                               </div>
-                              <p className="text-muted-foreground leading-relaxed">{data.where}</p>
+                              <p className="text-muted-foreground leading-relaxed">
+                                {hasPopularAlternative ? data.rivalPlans[mostVotedIndex].title : data.where}
+                              </p>
+                              {hasPopularAlternative && (
+                                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                                  <ThumbsUp className="w-3 h-3" /> {mostVotes} vote{mostVotes !== 1 ? 's' : ''}
+                                </p>
+                              )}
                             </PopoverContent>
                           </Popover>
                         </div>
@@ -233,50 +300,53 @@ function PlanSidebar({
                     </div>
 
                     {/* Rival Plans */}
-                    {data.rivalPlans?.length > 0 && (
+                    {alternatives.length > 0 && (
                       <div className="space-y-3">
                         <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest px-1">
                           <Split className="w-3.5 h-3.5" /> Alternative Options
                         </div>
                         <div className="space-y-3">
-                          {data.rivalPlans.map((rivalPlan: any, i: number) => {
-                            const voteCount = voteCounts[i] || 0;
-                            const hasMyVote = myVote?.alternativeIndex === i;
+                          {alternatives.map((alt: any, displayIndex: number) => {
+                            const actualIndex = alt.isOriginal ? -1 : alt.originalIndex;
+                            const voteCount = actualIndex >= 0 ? (voteCounts[actualIndex] || 0) : 0;
+                            const hasMyVote = actualIndex >= 0 && myVote?.alternativeIndex === actualIndex;
                             
                             return (
-                              <div key={i} className="relative group">
+                              <div key={displayIndex} className="relative group">
                                 <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
                                 <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
                                   <div className="flex items-center justify-between mb-2 gap-2">
-                                    <div className="text-sm font-bold text-foreground flex-1">{rivalPlan.title}</div>
-                                    <Button
-                                      variant={hasMyVote ? "default" : "outline"}
-                                      size="sm"
-                                      className={cn(
-                                        "h-7 gap-1.5 text-xs",
-                                        hasMyVote && "bg-amber-500 hover:bg-amber-600 text-white"
-                                      )}
-                                      onClick={() => hasMyVote ? handleRemoveVote() : handleVote(i)}
-                                      disabled={votingIndex !== null}
-                                      data-testid={`button-vote-${i}`}
-                                    >
-                                      {votingIndex === i || (votingIndex === -1 && hasMyVote) ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                      ) : (
-                                        <ThumbsUp className="w-3 h-3" />
-                                      )}
-                                      {voteCount > 0 && <span>{voteCount}</span>}
-                                      {hasMyVote ? "Voted" : "Vote"}
-                                    </Button>
+                                    <div className="text-sm font-bold text-foreground flex-1">{alt.title}</div>
+                                    {!alt.isOriginal && (
+                                      <Button
+                                        variant={hasMyVote ? "default" : "outline"}
+                                        size="sm"
+                                        className={cn(
+                                          "h-7 gap-1.5 text-xs",
+                                          hasMyVote && "bg-amber-500 hover:bg-amber-600 text-white"
+                                        )}
+                                        onClick={() => hasMyVote ? handleRemoveVote() : handleVote(actualIndex)}
+                                        disabled={votingIndex !== null}
+                                        data-testid={`button-vote-${actualIndex}`}
+                                      >
+                                        {votingIndex === actualIndex || (votingIndex === -1 && hasMyVote) ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <ThumbsUp className="w-3 h-3" />
+                                        )}
+                                        {voteCount > 0 && <span>{voteCount}</span>}
+                                        {hasMyVote ? "Voted" : "Vote"}
+                                      </Button>
+                                    )}
                                   </div>
                                   <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
-                                    <p className="text-xs text-muted-foreground leading-relaxed">{rivalPlan.details}</p>
+                                    <p className="text-xs text-muted-foreground leading-relaxed">{alt.details}</p>
                                   </div>
                                   {/* Supporters from AI */}
-                                  {rivalPlan.supporters?.length > 0 && (
+                                  {alt.supporters?.length > 0 && (
                                     <div className="mt-3 flex items-center gap-2 flex-wrap">
                                       <span className="text-[10px] text-muted-foreground font-medium">Supporters:</span>
-                                      {rivalPlan.supporters.map((name: string) => (
+                                      {alt.supporters.map((name: string) => (
                                         <Badge key={name} variant="outline" className="text-[9px] bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
                                           {name}
                                         </Badge>

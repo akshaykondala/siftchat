@@ -194,10 +194,12 @@ async function generatePlanSummary(groupId: number) {
           ]
         }
 
-        Be extremely strict with 'actions' - ONLY include items that were explicitly agreed upon or requested as tasks. Do not include vague discussion items.
-        Be extremely diligent in extracting 'reason' for EACH person. If a user says 'I can't because X', 'reason' MUST be 'X'. If they propose an alternative, that is their 'reason'.
-        For 'rivalPlans', list EACH popular alternative being discussed. Include the names of supporters who proposed or explicitly prefer each alternative.
-        For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
+        CRITICAL RULES:
+        1. ANYONE who PROPOSES a time or place should be marked as "can_make_it" because they wouldn't suggest something they can't attend. This applies to BOTH the main plan AND alternatives.
+        2. Be extremely strict with 'actions' - ONLY include items that were explicitly agreed upon or requested as tasks. Do not include vague discussion items.
+        3. Be extremely diligent in extracting 'reason' for EACH person. If a user says 'I can't because X', 'reason' MUST be 'X'. If they propose an alternative, that is their 'reason'.
+        4. For 'rivalPlans', list EACH popular alternative being discussed. Include the names of supporters who proposed or explicitly prefer each alternative.
+        5. For 'actions', extract clear tasks and who is supposed to do them based on the chat.`
       },
       {
         role: "user",

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { PlanVote } from "@shared/schema";
+import type { PlanVote, MessagePollVote } from "@shared/schema";
 import { 
   Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
   Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
@@ -25,6 +25,39 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
+
+// Utility function to detect poll questions in messages
+function detectPollOptions(content: string): string[] | null {
+  // Match patterns like "X or Y?" or "A vs B?" or "option1/option2?"
+  const patterns = [
+    /^(.+?)\s+or\s+(.+?)\??\s*$/i,           // "X or Y?"
+    /^(.+?)\s+vs\.?\s+(.+?)\??\s*$/i,        // "X vs Y?"
+    /^(.+?)\/(.+?)\??\s*$/,                   // "X/Y?"
+    /should\s+we\s+(?:do\s+)?(.+?)\s+or\s+(.+?)\??\s*$/i,  // "should we do X or Y?"
+  ];
+  
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match) {
+      const option1 = match[1].trim();
+      const option2 = match[2].trim();
+      // Only valid if both options are reasonable length
+      if (option1.length > 0 && option1.length < 50 && option2.length > 0 && option2.length < 50) {
+        return [option1, option2];
+      }
+    }
+  }
+  return null;
+}
+
+// Quick reply suggestions
+const QUICK_REPLIES = [
+  "I'm free this weekend",
+  "Evening works for me",
+  "Downtown area is good",
+  "I can drive",
+  "Count me in!",
+];
 
 // --- Sub-component: Join Modal ---
 function JoinModal({ groupName, onJoin, isLoading }: { groupName: string, onJoin: (name: string) => void, isLoading: boolean }) {
@@ -662,6 +695,23 @@ export default function GroupPage() {
     }
   });
 
+  // Fetch poll votes for this group's messages
+  const { data: pollVotes = [] } = useQuery<MessagePollVote[]>({
+    queryKey: ['/api/groups', group?.id, 'poll-votes'],
+    enabled: !!group?.id,
+    refetchInterval: 3000
+  });
+
+  // Poll vote mutation
+  const addPollVoteMutation = useMutation({
+    mutationFn: async ({ messageId, participantId, optionIndex }: { messageId: number; participantId: number; optionIndex: number }) => {
+      return apiRequest('POST', `/api/messages/${messageId}/poll-votes`, { participantId, optionIndex });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups', group?.id, 'poll-votes'] });
+    }
+  });
+
   const [messageText, setMessageText] = useState("");
   const [participantId, setParticipantId] = useState<number | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -803,6 +853,13 @@ export default function GroupPage() {
           
           {messages?.map((msg) => {
             const isMe = msg.participantId === participantId;
+            const pollOptions = detectPollOptions(msg.content);
+            const msgPollVotes = pollVotes.filter(v => v.messageId === msg.id);
+            const myPollVote = msgPollVotes.find(v => v.participantId === participantId);
+            const option0Votes = msgPollVotes.filter(v => v.optionIndex === 0).length;
+            const option1Votes = msgPollVotes.filter(v => v.optionIndex === 1).length;
+            const totalVotes = option0Votes + option1Votes;
+            
             return (
               <div 
                 key={msg.id} 
@@ -821,6 +878,61 @@ export default function GroupPage() {
                 >
                   {msg.content}
                 </div>
+                
+                {/* Poll UI - appears below poll-type messages */}
+                {pollOptions && participantId && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-2 w-full bg-gradient-to-br from-violet-50 to-indigo-50 dark:from-violet-900/20 dark:to-indigo-900/20 rounded-xl p-3 border border-violet-200 dark:border-violet-800/30 shadow-sm"
+                  >
+                    <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-2 flex items-center gap-1">
+                      <Split className="w-3 h-3" /> QUICK POLL
+                    </div>
+                    <div className="flex gap-2">
+                      {pollOptions.map((option, idx) => {
+                        const voteCount = idx === 0 ? option0Votes : option1Votes;
+                        const isMyVote = myPollVote?.optionIndex === idx;
+                        const percentage = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+                        
+                        return (
+                          <Button
+                            key={idx}
+                            variant={isMyVote ? "default" : "outline"}
+                            size="sm"
+                            className={cn(
+                              "flex-1 h-auto py-2 px-3 text-xs relative overflow-hidden",
+                              isMyVote && "ring-2 ring-violet-400"
+                            )}
+                            onClick={() => {
+                              if (participantId) {
+                                addPollVoteMutation.mutate({ messageId: msg.id, participantId, optionIndex: idx });
+                              }
+                            }}
+                            disabled={addPollVoteMutation.isPending}
+                            data-testid={`poll-option-${msg.id}-${idx}`}
+                          >
+                            {totalVotes > 0 && (
+                              <div 
+                                className="absolute inset-0 bg-violet-200 dark:bg-violet-700/30 transition-all" 
+                                style={{ width: `${percentage}%` }} 
+                              />
+                            )}
+                            <span className="relative z-10 flex items-center gap-1.5">
+                              {option}
+                              {totalVotes > 0 && (
+                                <Badge variant="secondary" className="text-[9px] px-1 py-0 bg-white/70 dark:bg-black/30">
+                                  {voteCount}
+                                </Badge>
+                              )}
+                            </span>
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+                
                 <span className="text-[10px] text-muted-foreground mt-1 opacity-60">
                   {format(new Date(msg.createdAt || new Date()), "h:mm a")}
                 </span>
@@ -831,7 +943,23 @@ export default function GroupPage() {
         </div>
 
         {/* Input Area */}
-        <div className="p-4 bg-background border-t">
+        <div className="p-4 bg-background border-t space-y-3">
+          {/* Quick Reply Suggestions */}
+          <div className="flex gap-2 overflow-x-auto pb-1 max-w-4xl mx-auto scrollbar-hide">
+            {QUICK_REPLIES.map((reply, idx) => (
+              <Button
+                key={idx}
+                variant="outline"
+                size="sm"
+                className="shrink-0 text-xs rounded-full px-3 h-7 bg-secondary/30 hover:bg-secondary/60 border-secondary/50"
+                onClick={() => setMessageText(reply)}
+                data-testid={`quick-reply-${idx}`}
+              >
+                {reply}
+              </Button>
+            ))}
+          </div>
+          
           <form onSubmit={handleSend} className="flex gap-2 max-w-4xl mx-auto">
             <Input
               value={messageText}

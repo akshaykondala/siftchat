@@ -44,6 +44,11 @@ The application has five core entities:
 - **Share Plan to Group Chat**: "Share Plan" button copies a text-message-friendly summary:
   - Includes group name, when/where, who's going, and invite link
   - Respects the displayed plan (if a voted alternative becomes main, it shares that plan's info)
+- **Quick Reply Buttons**: Suggestion chips above chat input for common responses (e.g., "I'm free this weekend", "Evening works for me")
+- **Auto-Poll Detection**: Messages with "X or Y?" patterns automatically show a voting poll below them
+  - Detects patterns: "X or Y?", "A vs B?", "X/Y?", "should we do X or Y?"
+  - Poll votes stored in message_poll_votes table
+  - Real-time vote counts with visual progress bars
 
 ### Replit AI Integrations
 Pre-configured OpenAI client modules exist in `server/replit_integrations/` for:

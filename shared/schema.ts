@@ -42,14 +42,6 @@ export const planVotes = pgTable("plan_votes", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const messagePollVotes = pgTable("message_poll_votes", {
-  id: serial("id").primaryKey(),
-  messageId: integer("message_id").notNull(),
-  participantId: integer("participant_id").notNull(),
-  optionIndex: integer("option_index").notNull(), // 0 or 1 for binary polls
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
 // === RELATIONS ===
 
 export const groupsRelations = relations(groups, ({ many, one }) => ({
@@ -92,9 +84,6 @@ export const plansRelations = relations(plans, ({ one }) => ({
 export const insertGroupSchema = createInsertSchema(groups).omit({ id: true, createdAt: true, shareLinkSlug: true });
 export const insertParticipantSchema = createInsertSchema(participants).omit({ id: true, joinedAt: true });
 export const insertMessageSchema = createInsertSchema(messages).omit({ id: true, createdAt: true });
-export const insertMessagePollVoteSchema = createInsertSchema(messagePollVotes).omit({ id: true, createdAt: true });
-
-export type InsertMessagePollVote = z.infer<typeof insertMessagePollVoteSchema>;
 
 // === EXPLICIT API CONTRACT TYPES ===
 
@@ -103,7 +92,6 @@ export type Participant = typeof participants.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Plan = typeof plans.$inferSelect;
 export type PlanVote = typeof planVotes.$inferSelect;
-export type MessagePollVote = typeof messagePollVotes.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
 export type JoinGroupRequest = { name: string }; // Participant name

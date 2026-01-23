@@ -3,7 +3,6 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
-import { insertMessagePollVoteSchema } from "@shared/schema";
 import { openai } from "./replit_integrations/audio/client"; // Re-using the configured OpenAI client
 
 export async function registerRoutes(
@@ -152,45 +151,6 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Vote removal error:", err);
       res.status(500).json({ message: "Failed to remove vote" });
-    }
-  });
-
-  // Message Poll Votes
-  app.get("/api/groups/:groupId/poll-votes", async (req, res) => {
-    const groupId = Number(req.params.groupId);
-    const messages = await storage.getMessagesByGroup(groupId);
-    const messageIds = messages.map(m => m.id);
-    const pollVotes = await storage.getPollVotesByMessages(messageIds);
-    res.json(pollVotes);
-  });
-
-  app.post("/api/messages/:messageId/poll-votes", async (req, res) => {
-    const messageId = Number(req.params.messageId);
-    try {
-      // Validate request body using Zod schema
-      const pollVoteSchema = insertMessagePollVoteSchema.pick({ participantId: true, optionIndex: true }).extend({
-        optionIndex: z.number().min(0).max(1) // Binary poll: 0 or 1
-      });
-      const input = pollVoteSchema.parse(req.body);
-      
-      // Get the message to find its group
-      const message = await storage.getMessageById(messageId);
-      if (!message) {
-        return res.status(404).json({ message: "Message not found" });
-      }
-      // Validate participant belongs to the same group
-      const participant = await storage.getParticipant(input.participantId);
-      if (!participant || participant.groupId !== message.groupId) {
-        return res.status(403).json({ message: "Invalid participant for this group" });
-      }
-      const vote = await storage.addPollVote(messageId, input.participantId, input.optionIndex);
-      res.status(201).json(vote);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      console.error("Poll vote error:", err);
-      res.status(500).json({ message: "Failed to record poll vote" });
     }
   });
 

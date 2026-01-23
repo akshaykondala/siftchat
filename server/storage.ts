@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { groups, participants, messages, plans, planVotes, messagePollVotes, type Group, type Participant, type Message, type Plan, type PlanVote, type MessagePollVote } from "@shared/schema";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { groups, participants, messages, plans, planVotes, type Group, type Participant, type Message, type Plan, type PlanVote } from "@shared/schema";
+import { eq, desc, and } from "drizzle-orm";
 import { randomBytes } from "crypto";
 
 export interface IStorage {
@@ -26,12 +26,6 @@ export interface IStorage {
   getVotesByGroup(groupId: number): Promise<PlanVote[]>;
   addVote(groupId: number, participantId: number, alternativeIndex: number): Promise<PlanVote>;
   removeVote(groupId: number, participantId: number): Promise<void>;
-
-  // Message Poll Votes
-  getPollVotesByMessages(messageIds: number[]): Promise<MessagePollVote[]>;
-  addPollVote(messageId: number, participantId: number, optionIndex: number): Promise<MessagePollVote>;
-  removePollVote(messageId: number, participantId: number): Promise<void>;
-  getMessageById(messageId: number): Promise<Message | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -126,29 +120,6 @@ export class DatabaseStorage implements IStorage {
   async removeVote(groupId: number, participantId: number): Promise<void> {
     await db.delete(planVotes).where(
       and(eq(planVotes.groupId, groupId), eq(planVotes.participantId, participantId))
-    );
-  }
-
-  async getPollVotesByMessages(messageIds: number[]): Promise<MessagePollVote[]> {
-    if (messageIds.length === 0) return [];
-    return db.select().from(messagePollVotes).where(inArray(messagePollVotes.messageId, messageIds));
-  }
-
-  async getMessageById(messageId: number): Promise<Message | undefined> {
-    const [message] = await db.select().from(messages).where(eq(messages.id, messageId));
-    return message;
-  }
-
-  async addPollVote(messageId: number, participantId: number, optionIndex: number): Promise<MessagePollVote> {
-    // Remove existing vote first (one vote per participant per message)
-    await this.removePollVote(messageId, participantId);
-    const [vote] = await db.insert(messagePollVotes).values({ messageId, participantId, optionIndex }).returning();
-    return vote;
-  }
-
-  async removePollVote(messageId: number, participantId: number): Promise<void> {
-    await db.delete(messagePollVotes).where(
-      and(eq(messagePollVotes.messageId, messageId), eq(messagePollVotes.participantId, participantId))
     );
   }
 }

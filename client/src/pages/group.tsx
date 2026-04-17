@@ -2,49 +2,64 @@ import React, { useEffect, useState, useRef } from "react";
 import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { usePlan, useGeneratePlan } from "@/hooks/use-plans";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance } from "@/hooks/use-trip";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { PlanVote } from "@shared/schema";
-import { 
-  Send, Users, Sparkles, Copy, Calendar, RefreshCw, 
-  Menu, X, Loader2, MapPin, Clock, AlignLeft, MessageCircle,
-  CheckCircle2, Info, UserCheck, UserMinus, HelpCircle,
-  Split, ClipboardCheck, User, ThumbsUp, Crown, Share2
-} from "lucide-react";
-import { format } from "date-fns";
 import { ShinyCard } from "@/components/ui/shiny-card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
+import { format } from "date-fns";
+import {
+  Send, Users, Sparkles, Copy, Share2, X, Loader2, MapPin, Calendar,
+  DollarSign, Zap, BedDouble, TrendingUp, CheckCircle2, HelpCircle,
+  MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
+  Heart, UserCheck, AlertCircle, Menu,
+} from "lucide-react";
+import type { TripPlan, TripAlternative, CommitmentLevel } from "@shared/schema";
 
-// --- Sub-component: Join Modal ---
-function JoinModal({ groupName, onJoin, isLoading }: { groupName: string, onJoin: (name: string) => void, isLoading: boolean }) {
-  const [name, setName] = useState("");
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (name.trim()) onJoin(name);
+// ─── Confidence Pill ───────────────────────────────────────────────────────────
+function ConfidencePill({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    "Early ideas": "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+    "Narrowing options": "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
+    "Almost decided": "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+    "Trip locked": "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   };
+  const icons: Record<string, React.ReactNode> = {
+    "Early ideas": <Sparkles className="w-3 h-3" />,
+    "Narrowing options": <TrendingUp className="w-3 h-3" />,
+    "Almost decided": <Star className="w-3 h-3" />,
+    "Trip locked": <CheckCircle2 className="w-3 h-3" />,
+  };
+  return (
+    <span
+      data-testid="status-confidence-pill"
+      className={cn(
+        "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold",
+        styles[status] ?? styles["Early ideas"]
+      )}
+    >
+      {icons[status] ?? icons["Early ideas"]}
+      {status}
+    </span>
+  );
+}
 
+// ─── Join Modal ────────────────────────────────────────────────────────────────
+function JoinModal({ groupName, onJoin, isLoading }: { groupName: string; onJoin: (name: string) => void; isLoading: boolean }) {
+  const [name, setName] = useState("");
+  const handleSubmit = (e: React.FormEvent) => { e.preventDefault(); if (name.trim()) onJoin(name); };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">
-      <ShinyCard className="w-full max-w-md animate-in-fade">
+      <ShinyCard className="w-full max-w-md">
         <div className="text-center space-y-4">
-          <div className="h-12 w-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto text-primary mb-4">
-            <Users className="w-6 h-6" />
+          <div className="h-12 w-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4 text-primary">
+            <Plane className="w-6 h-6" />
           </div>
-          <h2 className="text-2xl font-bold">Join {groupName}</h2>
-          <p className="text-muted-foreground">Enter your name to start chatting and planning.</p>
-          
+          <h2 className="text-2xl font-bold font-display">Join {groupName}</h2>
+          <p className="text-muted-foreground">Enter your name to start chatting and planning your trip.</p>
           <form onSubmit={handleSubmit} className="space-y-4 pt-4">
             <Input
               placeholder="Your Name"
@@ -52,9 +67,10 @@ function JoinModal({ groupName, onJoin, isLoading }: { groupName: string, onJoin
               onChange={(e) => setName(e.target.value)}
               className="h-12 text-lg text-center rounded-xl"
               autoFocus
+              data-testid="input-name"
             />
-            <Button type="submit" size="lg" className="w-full" isLoading={isLoading} disabled={!name.trim()}>
-              Join Group
+            <Button type="submit" size="lg" className="w-full" isLoading={isLoading} disabled={!name.trim()} data-testid="button-join">
+              Join Trip Group
             </Button>
           </form>
         </div>
@@ -63,144 +79,398 @@ function JoinModal({ groupName, onJoin, isLoading }: { groupName: string, onJoin
   );
 }
 
-// --- Sub-component: Plan Sidebar ---
-function PlanSidebar({ 
-  plan, 
-  isLoading, 
-  onRefresh, 
-  isRefreshing, 
-  isOpen, 
-  onClose,
-  groupName,
-  slug,
+// ─── Field Row ─────────────────────────────────────────────────────────────────
+function TripField({ icon, label, value, placeholder }: { icon: React.ReactNode; label: string; value?: string | null; placeholder: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="mt-0.5 text-primary/60 shrink-0">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">{label}</div>
+        <div className={cn("text-sm font-medium truncate", value ? "text-foreground" : "text-muted-foreground/50 italic")}>
+          {value || placeholder}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Trip Card ─────────────────────────────────────────────────────────────────
+function TripCard({ trip }: { trip: TripPlan | null }) {
+  if (!trip) {
+    return (
+      <div className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5">
+        <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/50 gap-3">
+          <Plane className="w-8 h-8 opacity-40" />
+          <p className="text-sm text-center">Start chatting — Pip will detect your trip details automatically.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const dateRange = trip.startDate && trip.endDate
+    ? `${trip.startDate} → ${trip.endDate}`
+    : trip.startDate || trip.endDate || null;
+
+  const likelyNames = trip.likelyAttendeeNames ?? [];
+  const committedNames = trip.committedAttendeeNames ?? [];
+
+  return (
+    <motion.div
+      layout
+      className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5 space-y-4"
+    >
+      <div className="space-y-3">
+        <TripField icon={<MapPin className="w-4 h-4" />} label="Destination" value={trip.destination} placeholder="Undecided" />
+        <TripField icon={<Calendar className="w-4 h-4" />} label="Dates" value={dateRange} placeholder="Dates TBD" />
+        <TripField icon={<DollarSign className="w-4 h-4" />} label="Budget" value={trip.budgetBand} placeholder="Budget TBD" />
+        <TripField icon={<Zap className="w-4 h-4" />} label="Vibe" value={trip.vibe} placeholder="Vibe TBD" />
+        <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
+      </div>
+
+      {(committedNames.length > 0 || likelyNames.length > 0) && (
+        <div className="pt-2 border-t border-primary/10 space-y-2">
+          {committedNames.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 mb-1.5 flex items-center gap-1">
+                <UserCheck className="w-3 h-3" /> Committed
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {committedNames.map((name) => (
+                  <Badge key={name} className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800 text-xs px-2 py-0.5">
+                    {name}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          {likelyNames.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-400 mb-1.5 flex items-center gap-1">
+                <Heart className="w-3 h-3" /> Likely going
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {likelyNames.map((name) => (
+                  <Badge key={name} variant="outline" className="bg-indigo-50/60 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:border-indigo-800 text-xs px-2 py-0.5">
+                    {name}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(trip.confidenceScore ?? 0) > 0 && (
+        <div className="pt-2 border-t border-primary/10">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Confidence</span>
+            <span className="text-xs font-bold text-primary">{trip.confidenceScore}%</span>
+          </div>
+          <div className="h-1.5 bg-primary/10 rounded-full overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full"
+              initial={{ width: 0 }}
+              animate={{ width: `${trip.confidenceScore}%` }}
+              transition={{ duration: 0.8, ease: "easeOut" }}
+            />
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ─── Planning Signals Strip ─────────────────────────────────────────────────────
+function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
+  if (!trip) return null;
+
+  const chips: { label: string; color: string; icon: React.ReactNode }[] = [];
+
+  if (trip.destination) chips.push({ label: trip.destination, color: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300", icon: <MapPin className="w-3 h-3" /> });
+  if (trip.startDate) chips.push({ label: trip.startDate, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
+  if (trip.endDate && trip.endDate !== trip.startDate) chips.push({ label: `→ ${trip.endDate}`, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
+  if (trip.budgetBand) chips.push({ label: trip.budgetBand, color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <DollarSign className="w-3 h-3" /> });
+  if (trip.vibe) chips.push({ label: trip.vibe, color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300", icon: <Zap className="w-3 h-3" /> });
+  if (trip.lodgingPreference) chips.push({ label: trip.lodgingPreference, color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300", icon: <BedDouble className="w-3 h-3" /> });
+
+  const questions = trip.unresolvedQuestions ?? [];
+
+  if (chips.length === 0 && questions.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      {chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {chips.map((chip, i) => (
+            <span
+              key={i}
+              className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium", chip.color)}
+              data-testid={`chip-signal-${i}`}
+            >
+              {chip.icon}
+              {chip.label}
+            </span>
+          ))}
+        </div>
+      )}
+      {questions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {questions.map((q, i) => (
+            <span
+              key={i}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              data-testid={`chip-question-${i}`}
+            >
+              <HelpCircle className="w-3 h-3" />
+              {q}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Attendance Buttons ─────────────────────────────────────────────────────────
+function AttendanceButtons({
+  alternativeId,
+  participantId,
+  groupId,
+  onUpdate,
+  isPending,
+}: {
+  alternativeId: number | null;
+  participantId: number;
+  groupId: number;
+  onUpdate: (level: CommitmentLevel) => void;
+  isPending: boolean;
+}) {
+  const buttons: { level: CommitmentLevel; label: string; color: string; activeColor: string }[] = [
+    { level: "interested", label: "Maybe", color: "bg-zinc-100 text-zinc-600 hover:bg-zinc-200", activeColor: "bg-zinc-200 text-zinc-800 ring-2 ring-zinc-400" },
+    { level: "likely", label: "Likely", color: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100", activeColor: "bg-indigo-100 text-indigo-800 ring-2 ring-indigo-400" },
+    { level: "committed", label: "I'm in!", color: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100", activeColor: "bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400" },
+    { level: "unavailable", label: "Can't go", color: "bg-red-50 text-red-600 hover:bg-red-100", activeColor: "bg-red-100 text-red-800 ring-2 ring-red-400" },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2" data-testid={`attendance-buttons-${alternativeId ?? "main"}`}>
+      {buttons.map(({ level, label, color }) => (
+        <button
+          key={level}
+          onClick={() => onUpdate(level)}
+          disabled={isPending}
+          className={cn(
+            "px-2.5 py-1 rounded-full text-xs font-medium transition-all",
+            color,
+            isPending && "opacity-50 cursor-not-allowed"
+          )}
+          data-testid={`button-attendance-${level}-${alternativeId ?? "main"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Alternative Card ──────────────────────────────────────────────────────────
+function AlternativeCard({
+  alt,
   groupId,
   participantId,
-  votes,
-  onVote,
-  onRemoveVote
-}: { 
-  plan: string, 
-  isLoading: boolean, 
-  onRefresh: () => void, 
-  isRefreshing: boolean,
-  isOpen: boolean,
-  onClose: () => void,
-  groupName: string,
-  slug: string,
-  groupId: number,
-  participantId: number,
-  votes: PlanVote[],
-  onVote: (alternativeIndex: number) => void,
-  onRemoveVote: () => void
+  isWinner,
+  voteMutation,
+  attendanceMutation,
+}: {
+  alt: TripAlternative;
+  groupId: number;
+  participantId: number;
+  isWinner: boolean;
+  voteMutation: ReturnType<typeof useVoteAlternative>;
+  attendanceMutation: ReturnType<typeof useUpdateAttendance>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const committedNames = alt.committedAttendeeNames ?? [];
+  const likelyNames = alt.likelyAttendeeNames ?? [];
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={cn(
+        "rounded-2xl border p-4 space-y-3 transition-all",
+        isWinner
+          ? "border-amber-300 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/20 dark:to-yellow-950/20"
+          : "border-primary/10 bg-white/60 dark:bg-zinc-900/40"
+      )}
+      data-testid={`card-alternative-${alt.id}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-sm text-foreground">{alt.destination ?? "Unknown destination"}</span>
+            {isWinner && (
+              <Badge className="bg-amber-400 text-white border-0 text-[10px] px-1.5 py-0 gap-1">
+                <Star className="w-2.5 h-2.5" /> Top Pick
+              </Badge>
+            )}
+          </div>
+          {alt.dateRange && (
+            <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+              <Calendar className="w-3 h-3" /> {alt.dateRange}
+            </div>
+          )}
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn(
+            "h-8 gap-1.5 text-xs shrink-0",
+            voteMutation.isPending && "opacity-60"
+          )}
+          onClick={() => voteMutation.mutate({ alternativeId: alt.id, participantId })}
+          disabled={voteMutation.isPending}
+          data-testid={`button-vote-${alt.id}`}
+        >
+          {voteMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <ThumbsUp className="w-3 h-3" />}
+          {(alt.voteCount ?? 0) > 0 && <span>{alt.voteCount}</span>}
+          Vote
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {alt.budgetBand && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+            <DollarSign className="w-3 h-3" /> {alt.budgetBand}
+          </span>
+        )}
+        {alt.vibe && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+            <Zap className="w-3 h-3" /> {alt.vibe}
+          </span>
+        )}
+        {(alt.supportScore ?? 0) > 0 && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">
+            <TrendingUp className="w-3 h-3" /> Score: {Math.round(alt.supportScore ?? 0)}
+          </span>
+        )}
+      </div>
+
+      {(committedNames.length > 0 || likelyNames.length > 0) && (
+        <div className="flex flex-wrap gap-1">
+          {committedNames.map((name) => (
+            <Badge key={`c-${name}`} className="text-[10px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300">
+              <UserCheck className="w-2.5 h-2.5 mr-0.5" />{name}
+            </Badge>
+          ))}
+          {likelyNames.map((name) => (
+            <Badge key={`l-${name}`} variant="outline" className="text-[10px] px-1.5 py-0 text-indigo-700 border-indigo-200 dark:text-indigo-300">
+              {name}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      {alt.evidenceSummary && (
+        <div>
+          <button
+            className="text-[11px] text-muted-foreground flex items-center gap-1 hover:text-foreground transition-colors"
+            onClick={() => setExpanded((v) => !v)}
+            data-testid={`button-expand-alt-${alt.id}`}
+          >
+            {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {expanded ? "Less" : "Why this option?"}
+          </button>
+          <AnimatePresence>
+            {expanded && (
+              <motion.p
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="text-xs text-muted-foreground mt-1 leading-relaxed"
+              >
+                {alt.evidenceSummary}
+              </motion.p>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      <div className="border-t border-primary/10 pt-2">
+        <div className="text-[10px] font-semibold text-muted-foreground mb-1">Your stance:</div>
+        <AttendanceButtons
+          alternativeId={alt.id}
+          participantId={participantId}
+          groupId={groupId}
+          onUpdate={(level) => attendanceMutation.mutate({ participantId, alternativeId: alt.id, commitmentLevel: level })}
+          isPending={attendanceMutation.isPending}
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Travel Workspace Panel ────────────────────────────────────────────────────
+function TravelWorkspace({
+  groupId,
+  groupName,
+  slug,
+  participantId,
+  trip,
+  alternatives,
+  isOpen,
+  onClose,
+}: {
+  groupId: number;
+  groupName: string;
+  slug: string;
+  participantId: number;
+  trip: TripPlan | null | undefined;
+  alternatives: TripAlternative[];
+  isOpen: boolean;
+  onClose: () => void;
 }) {
   const { toast } = useToast();
-  const [votingIndex, setVotingIndex] = useState<number | null>(null);
-  
-  // Get current user's vote
-  const myVote = votes.find(v => v.participantId === participantId);
-  
-  // Count votes per alternative
-  const voteCounts = votes.reduce((acc, v) => {
-    acc[v.alternativeIndex] = (acc[v.alternativeIndex] || 0) + 1;
-    return acc;
-  }, {} as Record<number, number>);
-  
-  const handleVote = (index: number) => {
-    setVotingIndex(index);
-    onVote(index);
-    setTimeout(() => setVotingIndex(null), 1000);
-  };
-  
-  const handleRemoveVote = () => {
-    setVotingIndex(-1);
-    onRemoveVote();
-    setTimeout(() => setVotingIndex(null), 1000);
-  };
+  const voteMutation = useVoteAlternative(groupId);
+  const attendanceMutation = useUpdateAttendance(groupId);
+
+  const winnerAltId = trip?.winningAlternativeId;
 
   const copyLink = () => {
-    const url = `${window.location.origin}/g/${slug}`;
-    navigator.clipboard.writeText(url);
-    toast({ title: "Link Copied", description: "Share it with your friends!" });
+    navigator.clipboard.writeText(`${window.location.origin}/g/${slug}`);
+    toast({ title: "Link Copied!", description: "Share it with your crew." });
   };
 
-  const sharePlanToGC = () => {
-    try {
-      const data = JSON.parse(plan);
-      
-      // Calculate which plan is currently displayed (same logic as rendering)
-      const mainPlanPopularity = (data.mainPlanSupporters?.length || 0);
-      const alternativePopularities = (data.rivalPlans || []).map((alt: any, i: number) => ({
-        index: i,
-        popularity: (alt.supporters?.length || 0) + (voteCounts[i] || 0),
-        plan: alt
-      }));
-      const mostPopularAlt = alternativePopularities.reduce((best: any, curr: any) => 
-        curr.popularity > (best?.popularity || 0) ? curr : best, null);
-      const shouldSwap = mostPopularAlt && mostPopularAlt.popularity > mainPlanPopularity;
-      
-      const displayWhen = shouldSwap ? mostPopularAlt.plan.when : data.when;
-      const displayWhere = shouldSwap ? mostPopularAlt.plan.where : data.where;
-      
-      // Calculate displayWho (same logic as UI)
-      let displayWho = data.who || [];
-      if (shouldSwap && mostPopularAlt?.plan?.supporters) {
-        const altSupporters = new Set(mostPopularAlt.plan.supporters.map((s: string) => s.toLowerCase().trim()));
-        const existingNames = new Set((data.who || []).map((p: any) => p.name.toLowerCase().trim()));
-        
-        displayWho = (data.who || []).map((person: any) => {
-          const personLower = person.name.toLowerCase().trim();
-          if (altSupporters.has(personLower)) {
-            return { ...person, status: 'can_make_it' };
-          }
-          if (person.status === 'can_make_it') {
-            return { ...person, status: 'undecided' };
-          }
-          return person;
-        });
-        
-        const missingSupporters = mostPopularAlt.plan.supporters
-          .filter((s: string) => !existingNames.has(s.toLowerCase().trim()))
-          .map((s: string) => ({ name: s, status: 'can_make_it' }));
-        displayWho = [...displayWho, ...missingSupporters];
-      }
-      
-      // Build short message
-      let message = `${groupName}\n`;
-      
-      const isUndecided = (val: string) => !val || val.toLowerCase().includes('undecided');
-      
-      if (!isUndecided(displayWhen)) {
-        message += `${displayWhen}`;
-      }
-      if (!isUndecided(displayWhere)) {
-        message += !isUndecided(displayWhen) ? ` @ ${displayWhere}` : displayWhere;
-      }
-      if (isUndecided(displayWhen) && isUndecided(displayWhere)) {
-        message += `Still deciding on time & place`;
-      }
-      
-      // Add who's going (using displayWho)
-      const goingPeople = displayWho.filter((p: any) => p.status === 'can_make_it').map((p: any) => p.name);
-      if (goingPeople.length > 0) {
-        message += `\nGoing: ${goingPeople.join(', ')}`;
-      }
-      
-      // Add link
-      message += `\n\nJoin/vote: ${window.location.origin}/g/${slug}`;
-      
-      navigator.clipboard.writeText(message);
-      toast({ title: "Plan Copied", description: "Paste it in your group chat!" });
-    } catch {
-      toast({ title: "No plan yet", description: "Start chatting to generate a plan first!", variant: "destructive" });
+  const shareTripSummary = () => {
+    const t = trip;
+    let text = `✈️ ${groupName}\n`;
+    if (t?.destination) text += `📍 ${t.destination}\n`;
+    if (t?.startDate || t?.endDate) {
+      const dates = [t.startDate, t.endDate].filter(Boolean).join(" → ");
+      text += `📅 ${dates}\n`;
     }
+    if (t?.budgetBand) text += `💰 ${t.budgetBand}\n`;
+    if (t?.vibe) text += `✨ Vibe: ${t.vibe}\n`;
+    if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
+    const committed = t?.committedAttendeeNames ?? [];
+    const likely = t?.likelyAttendeeNames ?? [];
+    if (committed.length) text += `\n✅ Committed: ${committed.join(", ")}`;
+    if (likely.length) text += `\n👍 Likely: ${likely.join(", ")}`;
+    text += `\n\n🔗 Join the planning: ${window.location.origin}/g/${slug}`;
+    navigator.clipboard.writeText(text);
+    toast({ title: "Trip Summary Copied!", description: "Paste it in your group chat." });
   };
+
+  const activeAlternatives = alternatives.filter((a) => a.status === "active");
 
   return (
     <>
-      {/* Mobile Overlay */}
+      {/* Mobile overlay */}
       <AnimatePresence>
         {isOpen && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -210,474 +480,161 @@ function PlanSidebar({
         )}
       </AnimatePresence>
 
-      {/* Sidebar Panel */}
       <motion.aside
         className={cn(
-          "fixed top-0 right-0 h-full w-full sm:w-[400px] bg-card border-l z-50 shadow-2xl lg:translate-x-0 lg:static lg:w-96 lg:shadow-none transition-transform duration-300 ease-out flex flex-col",
+          "fixed top-0 right-0 h-full w-full sm:w-[420px] bg-card border-l z-50 shadow-2xl flex flex-col",
+          "lg:relative lg:translate-x-0 lg:static lg:shadow-none lg:w-96 xl:w-[420px]",
           !isOpen && "translate-x-full lg:translate-x-0"
         )}
       >
-        <div className="p-6 border-b flex items-center justify-between bg-secondary/30">
-          <div className="flex items-center gap-2 text-primary font-bold text-lg">
-            <Sparkles className="w-5 h-5" />
-            <span>Current Plan</span>
+        {/* Sidebar header */}
+        <div className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md shrink-0">
+          <div className="flex items-center gap-2 font-bold text-primary">
+            <Plane className="w-4 h-4" />
+            <span className="text-sm">Trip Plan</span>
+            {trip?.status && <ConfidencePill status={trip.status} />}
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} className="lg:hidden">
+          <Button variant="ghost" size="icon" onClick={onClose} className="lg:hidden" data-testid="button-close-workspace">
             <X className="w-5 h-5" />
           </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          <div className="space-y-4">
-            <h3 className="text-2xl font-bold font-display">{groupName}</h3>
-            <div className="flex gap-2">
-              <Button variant="outline" className="flex-1 gap-2 rounded-xl" onClick={copyLink}>
-                <Copy className="w-4 h-4" /> Invite Link
-              </Button>
-              <Button variant="outline" className="flex-1 gap-2 rounded-xl" onClick={sharePlanToGC} data-testid="button-share-plan">
-                <Share2 className="w-4 h-4" /> Share Plan
-              </Button>
-            </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Action buttons */}
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={copyLink} data-testid="button-copy-link">
+              <Copy className="w-3.5 h-3.5" /> Invite Link
+            </Button>
+            <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={shareTripSummary} data-testid="button-share-trip-summary">
+              <Share2 className="w-3.5 h-3.5" /> Share Summary
+            </Button>
           </div>
 
-          <div className="bg-gradient-to-br from-primary/5 to-accent/10 rounded-2xl p-6 border border-primary/10">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">AI Summary</span>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="h-8 w-8 p-0 hover:bg-white/50" 
-                onClick={onRefresh}
-                disabled={isRefreshing}
-              >
-                <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
-              </Button>
-            </div>
-
-            {isLoading ? (
-              <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">
-                <Loader2 className="w-6 h-6 animate-spin" />
-                <span className="text-sm">Analyzing chat...</span>
-              </div>
-            ) : plan ? (() => {
-              try {
-                const data = JSON.parse(plan);
-                
-                // Calculate popularity for each plan (supporters + votes)
-                const mainPlanPopularity = (data.mainPlanSupporters?.length || 0);
-                
-                // Calculate popularity for each alternative
-                const alternativePopularities = (data.rivalPlans || []).map((alt: any, i: number) => ({
-                  index: i,
-                  popularity: (alt.supporters?.length || 0) + (voteCounts[i] || 0),
-                  votes: voteCounts[i] || 0,
-                  plan: alt
-                }));
-                
-                // Find the most popular alternative
-                const mostPopularAlt = alternativePopularities.reduce((best: any, curr: any) => 
-                  curr.popularity > (best?.popularity || 0) ? curr : best, null);
-                
-                // Only swap if alternative is MORE popular than main plan
-                const shouldSwap = mostPopularAlt && mostPopularAlt.popularity > mainPlanPopularity;
-                const swappedIndex = shouldSwap ? mostPopularAlt.index : -1;
-                
-                // Build the display data
-                const displayWhen = shouldSwap ? mostPopularAlt.plan.when : data.when;
-                const displayWhere = shouldSwap ? mostPopularAlt.plan.where : data.where;
-                const displayPopularity = shouldSwap ? mostPopularAlt.popularity : mainPlanPopularity;
-                
-                // Adjust attendees when displaying a swapped alternative
-                // People who supported the NEW main plan are "going"
-                // People who only supported the ORIGINAL plan are "undecided" for this option
-                let displayWho = data.who || [];
-                if (shouldSwap && mostPopularAlt?.plan?.supporters) {
-                  const altSupporters = new Set(mostPopularAlt.plan.supporters.map((s: string) => s.toLowerCase().trim()));
-                  const existingNames = new Set((data.who || []).map((p: any) => p.name.toLowerCase().trim()));
-                  
-                  // First, update existing entries
-                  displayWho = (data.who || []).map((person: any) => {
-                    const personLower = person.name.toLowerCase().trim();
-                    // If this person supported the alternative (now main), mark as going
-                    if (altSupporters.has(personLower)) {
-                      return { ...person, status: 'can_make_it', reason: person.reason || 'Supported this option' };
-                    }
-                    // If person was "can_make_it" for the ORIGINAL plan but didn't support this alternative,
-                    // mark them as undecided for this new main plan (unless they explicitly can't make it)
-                    if (person.status === 'can_make_it') {
-                      return { ...person, status: 'undecided', reason: 'Has not confirmed for this option' };
-                    }
-                    // Keep cannot_make_it and undecided as-is
-                    return person;
-                  });
-                  
-                  // Then, add supporters who weren't in the original who array
-                  const missingSupporters = mostPopularAlt.plan.supporters
-                    .filter((s: string) => !existingNames.has(s.toLowerCase().trim()))
-                    .map((s: string) => ({
-                      name: s,
-                      status: 'can_make_it',
-                      reason: 'Supported this option'
-                    }));
-                  displayWho = [...displayWho, ...missingSupporters];
-                }
-                
-                // Build alternatives list
-                const alternatives = (data.rivalPlans || [])
-                  .map((p: any, i: number) => ({ 
-                    ...p, 
-                    originalIndex: i,
-                    isSwapped: i === swappedIndex
-                  }))
-                  .filter((p: any) => !p.isSwapped)
-                  .concat(shouldSwap ? [{
-                    title: "Original Suggestion",
-                    when: data.when,
-                    where: data.where,
-                    supporters: data.mainPlanSupporters || [],
-                    originalIndex: -1,
-                    isOriginal: true
-                  }] : []);
-                
-                return (
-                  <div className="space-y-6 animate-in-slide-up">
-                    {/* Main Plan with Most Popular indicator */}
-                    <div className="relative">
-                      {displayPopularity > 0 && (
-                        <div className="absolute -top-2 -right-2 z-10">
-                          <Badge className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white border-0 shadow-md text-[9px] px-2 gap-1">
-                            <Crown className="w-2.5 h-2.5" /> {displayPopularity} supporter{displayPopularity !== 1 ? 's' : ''}
-                          </Badge>
-                        </div>
-                      )}
-                      {/* Unvote button when main plan is a voted alternative */}
-                      {shouldSwap && myVote?.alternativeIndex === swappedIndex && (
-                        <div className="mb-3">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full h-7 gap-1.5 text-xs bg-amber-500 hover:bg-amber-600 text-white border-amber-500"
-                            onClick={handleRemoveVote}
-                            disabled={votingIndex !== null}
-                            data-testid="button-unvote-main"
-                          >
-                            {votingIndex === -1 ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <ThumbsUp className="w-3 h-3" />
-                            )}
-                            Your vote - Click to Remove
-                          </Button>
-                        </div>
-                      )}
-                      {/* Show source indicator when displaying voted alternative */}
-                      {shouldSwap && (
-                        <div className="mb-2 px-1">
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
-                            <ThumbsUp className="w-3 h-3" /> Based on popular vote
-                          </span>
-                        </div>
-                      )}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
-                          <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
-                            <Clock className="w-3 h-3" /> WHEN
-                          </div>
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">
-                                {displayWhen}
-                              </div>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
-                              <div className="font-bold mb-1 text-primary flex items-center gap-2">
-                                <Clock className="w-3 h-3" /> Event Time
-                              </div>
-                              <p className="text-muted-foreground leading-relaxed">{displayWhen}</p>
-                            </PopoverContent>
-                          </Popover>
-                        </div>
-                        <div className="bg-white/40 dark:bg-black/20 p-3 rounded-2xl border border-primary/5 shadow-sm">
-                          <div className="flex items-center gap-2 text-xs font-bold text-primary mb-1">
-                            <MapPin className="w-3 h-3" /> WHERE
-                          </div>
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <div className="text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors">
-                                {displayWhere}
-                              </div>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-60 p-3 text-sm bg-card shadow-xl" side="bottom">
-                              <div className="font-bold mb-1 text-primary flex items-center gap-2">
-                                <MapPin className="w-3 h-3" /> Event Location
-                              </div>
-                              <p className="text-muted-foreground leading-relaxed">{displayWhere}</p>
-                            </PopoverContent>
-                          </Popover>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Rival Plans */}
-                    {alternatives.length > 0 && (
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest px-1">
-                          <Split className="w-3.5 h-3.5" /> Alternative Options
-                        </div>
-                        <div className="space-y-3">
-                          {alternatives.map((alt: any, displayIndex: number) => {
-                            const actualIndex = alt.isOriginal ? -1 : alt.originalIndex;
-                            const voteCount = actualIndex >= 0 ? (voteCounts[actualIndex] || 0) : 0;
-                            const hasMyVote = actualIndex >= 0 && myVote?.alternativeIndex === actualIndex;
-                            
-                            return (
-                              <div key={displayIndex} className="relative group">
-                                <div className="absolute -inset-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
-                                <div className="relative bg-white/60 dark:bg-black/40 border border-amber-500/20 rounded-2xl p-4 shadow-sm">
-                                  <div className="flex items-center justify-between mb-2 gap-2">
-                                    <div className="text-sm font-bold text-foreground flex-1">{alt.title}</div>
-                                    {!alt.isOriginal && (
-                                      <Button
-                                        variant={hasMyVote ? "default" : "outline"}
-                                        size="sm"
-                                        className={cn(
-                                          "h-7 gap-1.5 text-xs",
-                                          hasMyVote && "bg-amber-500 hover:bg-amber-600 text-white"
-                                        )}
-                                        onClick={() => hasMyVote ? handleRemoveVote() : handleVote(actualIndex)}
-                                        disabled={votingIndex !== null}
-                                        data-testid={`button-vote-${actualIndex}`}
-                                      >
-                                        {votingIndex === actualIndex || (votingIndex === -1 && hasMyVote) ? (
-                                          <Loader2 className="w-3 h-3 animate-spin" />
-                                        ) : (
-                                          <ThumbsUp className="w-3 h-3" />
-                                        )}
-                                        {voteCount > 0 && <span>{voteCount}</span>}
-                                        {hasMyVote ? "Voted" : "Vote"}
-                                      </Button>
-                                    )}
-                                  </div>
-                                  <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10 space-y-1">
-                                    {alt.when && (
-                                      <p className="text-xs text-muted-foreground leading-relaxed flex items-center gap-1">
-                                        <Clock className="w-3 h-3 text-primary/60" /> <span className="font-medium">{alt.when}</span>
-                                      </p>
-                                    )}
-                                    {alt.where && (
-                                      <p className="text-xs text-muted-foreground leading-relaxed flex items-center gap-1">
-                                        <MapPin className="w-3 h-3 text-primary/60" /> <span className="font-medium">{alt.where}</span>
-                                      </p>
-                                    )}
-                                  </div>
-                                  {/* Supporters from AI + vote count */}
-                                  {(alt.supporters?.length > 0 || voteCount > 0) && (
-                                    <div className="mt-3 flex items-center gap-2 flex-wrap">
-                                      <span className="text-[10px] text-muted-foreground font-medium">
-                                        {(alt.supporters?.length || 0) + voteCount} supporter{(alt.supporters?.length || 0) + voteCount !== 1 ? 's' : ''}:
-                                      </span>
-                                      {alt.supporters?.map((name: string) => (
-                                        <Badge key={name} variant="outline" className="text-[9px] bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
-                                          {name}
-                                        </Badge>
-                                      ))}
-                                      {voteCount > 0 && (
-                                        <Badge variant="outline" className="text-[9px] bg-amber-100 dark:bg-amber-800/30 border-amber-300 dark:border-amber-700">
-                                          +{voteCount} vote{voteCount !== 1 ? 's' : ''}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground uppercase tracking-widest">
-                        <Users className="w-3 h-3" /> Attendees
-                      </div>
-                      
-                      <div className="space-y-4">
-                        {/* Can Make It */}
-                        {displayWho?.some((p: any) => p.status === 'can_make_it') && (
-                          <div className="space-y-2">
-                            <div className="text-[10px] font-bold text-green-600 dark:text-green-400 flex items-center gap-1.5 px-1">
-                              <UserCheck className="w-3 h-3" /> GOING
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {displayWho.filter((p: any) => p.status === 'can_make_it').map((p: any) => (
-                                <Popover key={p.name}>
-                                  <PopoverTrigger asChild>
-                                    <Badge variant="secondary" className="bg-green-50 text-green-700 border-green-100 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800/30 rounded-lg py-0.5 px-2.5 cursor-pointer hover-elevate">
-                                      {p.name}
-                                    </Badge>
-                                  </PopoverTrigger>
-                                  <PopoverContent className="w-60 p-3 text-xs bg-card border-green-100 shadow-xl" side="top">
-                                    <div className="font-bold mb-1 text-green-600">{p.name}</div>
-                                    <p className="text-muted-foreground leading-relaxed">{p.reason || "Confirmed attendance"}</p>
-                                  </PopoverContent>
-                                </Popover>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Cannot Make It */}
-                        {displayWho?.some((p: any) => p.status === 'cannot_make_it') && (
-                          <div className="space-y-2">
-                            <div className="text-[10px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5 px-1">
-                              <UserMinus className="w-3 h-3" /> CAN'T MAKE IT
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {displayWho.filter((p: any) => p.status === 'cannot_make_it').map((p: any) => (
-                                <Popover key={p.name}>
-                                  <PopoverTrigger asChild>
-                                    <Badge variant="secondary" className="bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800/30 rounded-lg py-0.5 px-2.5 cursor-help hover-elevate">
-                                      {p.name}
-                                    </Badge>
-                                  </PopoverTrigger>
-                                  <PopoverContent className="w-60 p-3 text-xs bg-card border-red-100 shadow-xl" side="top">
-                                    <div className="font-bold mb-1 text-red-600">{p.name}'s Reason</div>
-                                    <p className="text-muted-foreground leading-relaxed">{p.reason || "No reason specified"}</p>
-                                  </PopoverContent>
-                                </Popover>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Undecided */}
-                        {displayWho?.some((p: any) => p.status === 'undecided') && (
-                          <div className="space-y-2">
-                            <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5 px-1">
-                              <HelpCircle className="w-3 h-3" /> UNDECIDED
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {displayWho.filter((p: any) => p.status === 'undecided').map((p: any) => (
-                                <Popover key={p.name}>
-                                  <PopoverTrigger asChild>
-                                    <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800/30 rounded-lg py-0.5 px-2.5 cursor-help hover-elevate">
-                                      {p.name}
-                                    </Badge>
-                                  </PopoverTrigger>
-                                  <PopoverContent className="w-60 p-3 text-xs bg-card border-amber-100 shadow-xl" side="top">
-                                    <div className="font-bold mb-1 text-amber-600">{p.name}'s Input</div>
-                                    <p className="text-muted-foreground leading-relaxed">{p.reason || "Hasn't confirmed yet"}</p>
-                                  </PopoverContent>
-                                </Popover>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {data.actions?.length > 0 && (
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground uppercase tracking-widest">
-                          <ClipboardCheck className="w-3 h-3" /> Action Items
-                        </div>
-                        <div className="grid gap-2">
-                          {data.actions.map((action: any, i: number) => (
-                            <div key={i} className="flex items-center justify-between gap-3 text-xs bg-white/40 dark:bg-black/20 p-2.5 rounded-xl border border-primary/5 shadow-sm">
-                              <div className="flex items-start gap-2.5">
-                                <div className="mt-0.5 h-4 w-4 rounded-full border-2 border-primary/30 flex items-center justify-center shrink-0">
-                                  <div className="h-1.5 w-1.5 rounded-full bg-primary/40" />
-                                </div>
-                                <span className="font-medium text-foreground/90">{action.task}</span>
-                              </div>
-                              <Badge variant="outline" className="shrink-0 text-[9px] px-1.5 py-0 bg-primary/5 border-primary/10">
-                                <User className="w-2.5 h-2.5 mr-1" /> {action.assignee}
-                              </Badge>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              } catch (e) {
-                return (
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 font-medium bg-white/40 p-4 rounded-xl border">
-                    {plan}
-                  </div>
-                );
-              }
-            })() : (
-              <div className="flex flex-col items-center justify-center h-40 text-muted-foreground text-center p-4">
-                <MessageCircle className="w-8 h-8 mb-2 opacity-50" />
-                <p className="text-sm">Start chatting to generate a plan!</p>
-              </div>
-            )}
+          {/* Trip Card */}
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Current Plan</div>
+            <TripCard trip={trip ?? null} />
           </div>
+
+          {/* Planning Signals */}
+          {trip && (
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Detected Signals</div>
+              <PlanningSignalsStrip trip={trip} />
+            </div>
+          )}
+
+          {/* Alternatives */}
+          {activeAlternatives.length > 0 && (
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1 flex items-center gap-1">
+                <AlertCircle className="w-3 h-3" /> Alternative Options
+              </div>
+              <div className="space-y-3">
+                <AnimatePresence>
+                  {activeAlternatives.map((alt) => (
+                    <AlternativeCard
+                      key={alt.id}
+                      alt={alt}
+                      groupId={groupId}
+                      participantId={participantId}
+                      isWinner={alt.id === winnerAltId}
+                      voteMutation={voteMutation}
+                      attendanceMutation={attendanceMutation}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+            </div>
+          )}
         </div>
-        
-        <div className="p-4 border-t bg-secondary/10 text-center text-xs text-muted-foreground">
-           Summaries update automatically as you chat.
+
+        <div className="p-3 border-t bg-secondary/10 text-center text-[10px] text-muted-foreground shrink-0">
+          Pip updates your plan as the conversation evolves.
         </div>
       </motion.aside>
     </>
   );
 }
 
+// ─── Chat Messages ─────────────────────────────────────────────────────────────
+function PipMessage({ content, time }: { content: string; time: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-start gap-2 max-w-[85%] sm:max-w-[75%]"
+      data-testid="message-pip"
+    >
+      <div className="h-7 w-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+        <Sparkles className="w-3.5 h-3.5 text-white" />
+      </div>
+      <div>
+        <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
+        <div className="px-4 py-2.5 rounded-2xl rounded-tl-none text-sm leading-relaxed bg-gradient-to-br from-violet-100 to-indigo-100 text-violet-900 dark:from-violet-900/30 dark:to-indigo-900/30 dark:text-violet-100 shadow-sm border border-violet-200/50 dark:border-violet-800/50">
+          {content}
+        </div>
+        <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
+      </div>
+    </motion.div>
+  );
+}
 
+function UserMessage({ content, name, isMe, time }: { content: string; name: string; isMe: boolean; time: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={cn("flex flex-col max-w-[85%] sm:max-w-[70%]", isMe ? "ml-auto items-end" : "items-start")}
+      data-testid={isMe ? "message-mine" : "message-other"}
+    >
+      {!isMe && <span className="text-xs font-semibold text-muted-foreground mb-1">{name}</span>}
+      <div className={cn(
+        "px-4 py-2 rounded-2xl text-sm shadow-sm leading-relaxed break-words",
+        isMe
+          ? "bg-primary text-primary-foreground rounded-tr-none"
+          : "bg-white dark:bg-zinc-800 border rounded-tl-none"
+      )}>
+        {content}
+      </div>
+      <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
+    </motion.div>
+  );
+}
+
+// ─── Group Page (Main) ────────────────────────────────────────────────────────
 export default function GroupPage() {
   const [match, params] = useRoute("/g/:slug");
   const slug = match ? params.slug : "";
+
   const { data: group, isLoading: groupLoading, error: groupError } = useGroup(slug);
-  const { data: messages, isLoading: messagesLoading } = useMessages(group?.id || 0);
-  const { data: planData } = usePlan(group?.id || 0);
-  
-  // Fetch votes for this group
-  const { data: votes = [] } = useQuery<PlanVote[]>({
-    queryKey: ['/api/groups', group?.id, 'votes'],
-    enabled: !!group?.id,
-    refetchInterval: 5000
-  });
-  
+  const { data: messages } = useMessages(group?.id ?? 0);
+  const { data: trip } = useTripPlan(group?.id ?? 0);
+  const { data: alternatives = [] } = useTripAlternatives(group?.id ?? 0);
+
   const joinGroup = useJoinGroup();
   const sendMessage = useSendMessage();
-  const generatePlan = useGeneratePlan();
-  
-  // Vote mutations
-  const addVoteMutation = useMutation({
-    mutationFn: async ({ groupId, participantId, alternativeIndex }: { groupId: number; participantId: number; alternativeIndex: number }) => {
-      return apiRequest('POST', `/api/groups/${groupId}/votes`, { participantId, alternativeIndex });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/groups', group?.id, 'votes'] });
-    }
-  });
-  
-  const removeVoteMutation = useMutation({
-    mutationFn: async ({ groupId, participantId }: { groupId: number; participantId: number }) => {
-      return apiRequest('DELETE', `/api/groups/${groupId}/votes`, { participantId });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/groups', group?.id, 'votes'] });
-    }
-  });
 
   const [messageText, setMessageText] = useState("");
   const [participantId, setParticipantId] = useState<number | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [forceShowJoin, setForceShowJoin] = useState(false);
+  const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Check localStorage for existing participant ID
   const storedParticipantId = slug ? localStorage.getItem(`evite_participant_${slug}`) : null;
-  
-  // Participants are included in the group response
   const participants = group?.participants;
 
-  // Scroll to bottom of chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Auto-switch to plan tab on mobile when new trip data arrives
+  useEffect(() => {
+    if (trip?.status && trip.status !== "Early ideas" && mobileTab === "chat") {
+      // Don't auto-switch — user drives this
+    }
+  }, [trip?.status]);
 
   const handleJoin = async (name: string) => {
     try {
@@ -685,17 +642,15 @@ export default function GroupPage() {
       localStorage.setItem(`evite_participant_${slug}`, String(participant.id));
       setParticipantId(participant.id);
       setForceShowJoin(false);
-    } catch (e) {
-      // Error handled in hook
+    } catch {
+      // Handled in hook
     }
   };
-  
+
   const handleContinueAsExisting = () => {
-    if (storedParticipantId) {
-      setParticipantId(Number(storedParticipantId));
-    }
+    if (storedParticipantId) setParticipantId(Number(storedParticipantId));
   };
-  
+
   const handleJoinAsNew = () => {
     localStorage.removeItem(`evite_participant_${slug}`);
     setForceShowJoin(true);
@@ -704,66 +659,57 @@ export default function GroupPage() {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageText.trim() || !group || !participantId) return;
-
     const content = messageText;
-    setMessageText(""); // Optimistic clear
-
+    setMessageText("");
     try {
-      await sendMessage.mutateAsync({
-        groupId: group.id,
-        participantId,
-        content
-      });
-    } catch (e) {
-      setMessageText(content); // Restore on fail
+      await sendMessage.mutateAsync({ groupId: group.id, participantId, content });
+    } catch {
+      setMessageText(content);
     }
   };
 
+  // ── Loading / Error states ──
   if (groupLoading) {
-    return <div className="h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
   }
 
   if (groupError || !group) {
-    return <div className="h-screen flex items-center justify-center text-destructive">Group not found</div>;
+    return (
+      <div className="h-screen flex items-center justify-center text-destructive">
+        Group not found
+      </div>
+    );
   }
 
-  // Check if stored participant exists in loaded participants
-  // Since participants are included in group response, they're available when group loads
-  const validStoredParticipant = storedParticipantId && participants 
-    ? participants.find(p => p.id === Number(storedParticipantId))
+  // ── Welcome Back flow ──
+  const validStoredParticipant = storedParticipantId && participants
+    ? participants.find((p) => p.id === Number(storedParticipantId))
     : null;
 
-  // Show welcome back choice if we have a valid stored participant
   if (validStoredParticipant && !participantId && !forceShowJoin) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-indigo-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-indigo-50 dark:from-violet-950/20 dark:via-background dark:to-indigo-950/20 flex items-center justify-center p-4">
         <motion.div
           initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          className="bg-white rounded-3xl p-8 shadow-2xl border border-primary/10 w-full max-w-md text-center"
+          className="bg-white dark:bg-zinc-900 rounded-3xl p-8 shadow-2xl border border-primary/10 w-full max-w-md text-center"
         >
           <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-accent mx-auto mb-6 flex items-center justify-center">
-            <Users className="w-8 h-8 text-white" />
+            <Plane className="w-8 h-8 text-white" />
           </div>
           <h2 className="text-2xl font-bold font-display mb-2">Welcome Back!</h2>
           <p className="text-muted-foreground mb-6">
-            You've been here before as <span className="font-semibold text-primary">{validStoredParticipant.name}</span>
+            Continue planning as <span className="font-semibold text-primary">{validStoredParticipant.name}</span>?
           </p>
-          
           <div className="space-y-3">
-            <Button
-              className="w-full h-12 rounded-xl text-base"
-              onClick={handleContinueAsExisting}
-              data-testid="button-continue-as"
-            >
+            <Button className="w-full h-12 rounded-xl text-base" onClick={handleContinueAsExisting} data-testid="button-continue-as">
               Continue as {validStoredParticipant.name}
             </Button>
-            <Button
-              variant="outline"
-              className="w-full h-12 rounded-xl text-base"
-              onClick={handleJoinAsNew}
-              data-testid="button-join-as-new"
-            >
+            <Button variant="outline" className="w-full h-12 rounded-xl text-base" onClick={handleJoinAsNew} data-testid="button-join-as-new">
               Join as someone else
             </Button>
           </div>
@@ -772,101 +718,135 @@ export default function GroupPage() {
     );
   }
 
-  // Show join modal if no participant
   if (!participantId) {
     return <JoinModal groupName={group.name} onJoin={handleJoin} isLoading={joinGroup.isPending} />;
   }
 
+  // ── Main layout ──
   return (
-    <div className="flex h-screen bg-background overflow-hidden relative pt-[env(safe-area-inset-top)]">
-      
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col h-full relative">
+    <div className="flex h-screen bg-background overflow-hidden">
+
+      {/* ── LEFT: Chat Panel ── */}
+      <div className={cn(
+        "flex-1 flex flex-col h-full relative min-w-0",
+        "lg:flex",
+        mobileTab === "plan" ? "hidden" : "flex"
+      )}>
         {/* Header */}
-        <header className="h-16 border-b flex items-center justify-between px-4 bg-white/50 backdrop-blur-md sticky top-0 z-10">
-          <div className="font-bold text-lg truncate flex-1">{group.name}</div>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="lg:hidden text-primary"
-            onClick={() => setIsSidebarOpen(true)}
+        <header className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <div className="font-bold text-lg truncate font-display">{group.name}</div>
+            {trip?.status && (
+              <span className="hidden sm:block shrink-0">
+                <ConfidencePill status={trip.status} />
+              </span>
+            )}
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden text-primary shrink-0"
+            onClick={() => setIsWorkspaceOpen(true)}
+            data-testid="button-open-workspace"
           >
             <Sparkles className="w-5 h-5" />
           </Button>
         </header>
 
-        {/* Messages List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="messages-container">
           <div className="text-center text-xs text-muted-foreground my-4">
-            Group created {format(new Date(group.createdAt || new Date()), "MMM d, yyyy")}
+            Group created {format(new Date(group.createdAt ?? new Date()), "MMM d, yyyy")}
           </div>
-          
-          {messages?.map((msg) => {
-            const isMe = msg.participantId === participantId;
-            return (
-              <div 
-                key={msg.id} 
-                className={cn("flex flex-col max-w-[85%] sm:max-w-[70%]", isMe ? "ml-auto items-end" : "items-start")}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  {!isMe && <span className="text-xs font-semibold text-muted-foreground">{msg.participantName}</span>}
-                </div>
-                <div 
-                  className={cn(
-                    "px-4 py-2 rounded-2xl text-sm shadow-sm leading-relaxed break-words",
-                    isMe 
-                      ? "bg-primary text-primary-foreground rounded-tr-none" 
-                      : "bg-white dark:bg-zinc-800 border rounded-tl-none"
-                  )}
-                >
-                  {msg.content}
-                </div>
-                <span className="text-[10px] text-muted-foreground mt-1 opacity-60">
-                  {format(new Date(msg.createdAt || new Date()), "h:mm a")}
-                </span>
-              </div>
-            );
-          })}
+
+          <AnimatePresence initial={false}>
+            {messages?.map((msg) => {
+              const time = format(new Date(msg.createdAt ?? new Date()), "h:mm a");
+              if (msg.isPip) {
+                return <PipMessage key={`pip-${msg.id}`} content={msg.content} time={time} />;
+              }
+              return (
+                <UserMessage
+                  key={msg.id}
+                  content={msg.content}
+                  name={msg.participantName}
+                  isMe={msg.participantId === participantId}
+                  time={time}
+                />
+              );
+            })}
+          </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
-        <div className="p-4 bg-background border-t">
+        {/* Input */}
+        <div className="p-4 bg-background border-t shrink-0">
           <form onSubmit={handleSend} className="flex gap-2 max-w-4xl mx-auto">
             <Input
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder="Type a message..."
+              placeholder="Share your thoughts on the trip..."
               className="rounded-full pl-6 bg-secondary/50 border-transparent focus:bg-background focus:border-primary/20 transition-all shadow-inner"
+              data-testid="input-message"
             />
-            <Button 
-              type="submit" 
-              size="icon" 
+            <Button
+              type="submit"
+              size="icon"
               className="rounded-full h-10 w-10 shrink-0 shadow-md"
               disabled={!messageText.trim() || sendMessage.isPending}
+              data-testid="button-send"
             >
-              <Send className="w-4 h-4 ml-0.5" />
+              {sendMessage.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 ml-0.5" />}
             </Button>
           </form>
         </div>
       </div>
 
-      {/* Plan Sidebar */}
-      <PlanSidebar 
-        plan={planData?.summary || ""} 
-        isLoading={!planData && (messages?.length ?? 0) > 0} 
-        onRefresh={() => generatePlan.mutate(group.id)}
-        isRefreshing={generatePlan.isPending}
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        groupName={group.name}
-        slug={slug}
-        groupId={group.id}
-        participantId={participantId}
-        votes={votes}
-        onVote={(alternativeIndex) => addVoteMutation.mutate({ groupId: group.id, participantId, alternativeIndex })}
-        onRemoveVote={() => removeVoteMutation.mutate({ groupId: group.id, participantId })}
-      />
+      {/* ── RIGHT: Travel Workspace (desktop permanent, mobile slide-over) ── */}
+      <div className={cn(
+        "lg:block",
+        mobileTab === "plan" ? "block w-full" : "hidden"
+      )}>
+        <TravelWorkspace
+          groupId={group.id}
+          groupName={group.name}
+          slug={slug}
+          participantId={participantId}
+          trip={trip}
+          alternatives={alternatives}
+          isOpen={isWorkspaceOpen}
+          onClose={() => setIsWorkspaceOpen(false)}
+        />
+      </div>
+
+      {/* ── Mobile Bottom Tab Bar ── */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur-md flex">
+        <button
+          className={cn(
+            "flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",
+            mobileTab === "chat" ? "text-primary" : "text-muted-foreground"
+          )}
+          onClick={() => { setMobileTab("chat"); setIsWorkspaceOpen(false); }}
+          data-testid="tab-chat"
+        >
+          <MessageCircle className="w-5 h-5" />
+          Chat
+        </button>
+        <button
+          className={cn(
+            "flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors relative",
+            mobileTab === "plan" ? "text-primary" : "text-muted-foreground"
+          )}
+          onClick={() => setMobileTab("plan")}
+          data-testid="tab-plan"
+        >
+          <Plane className="w-5 h-5" />
+          Trip Plan
+          {trip?.status && trip.status !== "Early ideas" && (
+            <span className="absolute top-2 right-6 w-2 h-2 bg-primary rounded-full" />
+          )}
+        </button>
+      </div>
     </div>
   );
 }

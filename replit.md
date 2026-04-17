@@ -18,6 +18,29 @@ Preferred communication style: Simple, everyday language.
 - **Animations**: Framer Motion for smooth transitions and entry animations
 - **Design System**: Custom violet/indigo color palette with CSS variables, using Outfit (display) and DM Sans (body) fonts
 
+### Group Page Layout
+The main `/g/:slug` page has a two-panel layout:
+- **Left**: Chat panel — user messages and Pip AI messages (styled differently: violet bubble, Sparkles avatar, "Pip" name label)
+- **Right**: Travel Workspace — Trip Card, Planning Signals Strip, Alternatives section with voting and attendance buttons
+- **Mobile**: Bottom tab bar toggles between "Chat" and "Trip Plan" views
+- **Header**: Group name + confidence status pill (Early ideas / Narrowing options / Almost decided / Trip locked) + plan workspace button
+
+### Key Frontend Components (client/src/pages/group.tsx)
+- `ConfidencePill` — colored badge for trip status
+- `TripCard` — displays all structured trip fields with graceful placeholders
+- `PlanningSignalsStrip` — colored chips for detected destinations, dates, budget, vibe, lodging, and unresolved questions
+- `AlternativeCard` — bundled alternative with vote button, attendance quick-action buttons, expandable evidence summary
+- `AttendanceButtons` — four stance buttons: Maybe / Likely / I'm in! / Can't go
+- `TravelWorkspace` — right sidebar container with copy link, share trip summary, trip card, signals, alternatives
+- `PipMessage` — distinct violet gradient bubble with Sparkles avatar
+- `UserMessage` — regular chat message
+
+### New Hooks (client/src/hooks/use-trip.ts)
+- `useTripPlan(groupId)` — polls GET /api/groups/:groupId/trip every 5s
+- `useTripAlternatives(groupId)` — polls GET /api/groups/:groupId/trip/alternatives every 5s
+- `useVoteAlternative(groupId)` — POST /api/groups/:groupId/trip/alternatives/:id/vote
+- `useUpdateAttendance(groupId)` — POST /api/groups/:groupId/trip/attendance
+
 ### Backend Architecture
 - **Framework**: Express 5 running on Node.js with TypeScript
 - **API Design**: REST endpoints defined in `shared/routes.ts` with Zod schemas for validation

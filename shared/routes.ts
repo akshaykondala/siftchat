@@ -152,6 +152,17 @@ export const api = {
       },
     },
   },
+  tripLock: {
+    lock: {
+      method: 'POST' as const,
+      path: '/api/groups/:groupId/trip/lock',
+      input: z.object({ alternativeId: z.number().optional() }),
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        404: errorSchemas.notFound,
+      },
+    },
+  },
   pipMessages: {
     list: {
       method: 'GET' as const,

@@ -3,6 +3,20 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { api, buildUrl } from "@shared/routes";
 import type { TripPlan, TripAlternative, CommitmentLevel, PipMessage, SupportSignal } from "@shared/schema";
 
+export function useLockTrip(groupId: number) {
+  return useMutation({
+    mutationFn: async ({ alternativeId }: { alternativeId?: number }) => {
+      const url = buildUrl(api.tripLock.lock.path, { groupId });
+      return apiRequest("POST", url, { alternativeId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.tripPlan.get.path, groupId] });
+      queryClient.invalidateQueries({ queryKey: [api.tripAlternatives.list.path, groupId] });
+      queryClient.invalidateQueries({ queryKey: [api.pipMessages.list.path, groupId] });
+    },
+  });
+}
+
 export function useTripPlan(groupId: number) {
   return useQuery<TripPlan | null>({
     queryKey: [api.tripPlan.get.path, groupId],

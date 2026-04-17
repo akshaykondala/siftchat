@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance } from "@/hooks/use-trip";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useLockTrip } from "@/hooks/use-trip";
 import { usePresence } from "@/hooks/use-presence";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
   DollarSign, BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
-  Heart, AlertCircle, UserCheck,
+  Heart, AlertCircle, UserCheck, Lock,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
 
@@ -179,17 +179,30 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
   const likelyNames = (winnerAlt?.likelyAttendeeNames ?? trip.likelyAttendeeNames) ?? [];
   const committedNames = (winnerAlt?.committedAttendeeNames ?? trip.committedAttendeeNames) ?? [];
 
+  const isLocked = trip?.status === "Trip locked";
+
   return (
     <motion.div
       layout
       className={cn(
         "rounded-2xl border p-5 space-y-4",
-        winnerAlt
+        isLocked
+          ? "border-emerald-400 dark:border-emerald-600 bg-gradient-to-br from-emerald-50/80 to-teal-50/80 dark:from-emerald-950/30 dark:to-teal-950/30"
+          : winnerAlt
           ? "border-emerald-300 dark:border-emerald-700 bg-gradient-to-br from-emerald-50/60 to-teal-50/60 dark:from-emerald-950/20 dark:to-teal-950/20"
           : "border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20"
       )}
+      data-testid="trip-card"
     >
-      {winnerAlt && (
+      {isLocked && (
+        <div
+          className="flex items-center gap-2 justify-center px-3 py-2 rounded-xl bg-emerald-500 text-white text-sm font-bold"
+          data-testid="banner-trip-locked"
+        >
+          <Lock className="w-4 h-4" /> Trip Locked
+        </div>
+      )}
+      {!isLocked && winnerAlt && (
         <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 text-[11px] font-bold uppercase tracking-widest">
           <Star className="w-3.5 h-3.5" /> Winning Option — {winnerAlt.aiSummary || winnerAlt.destination}
         </div>
@@ -532,15 +545,19 @@ function AlternativeCard({
   groupId,
   participantId,
   isWinner,
+  tripStatus,
   voteMutation,
   attendanceMutation,
+  lockMutation,
 }: {
   alt: TripAlternative;
   groupId: number;
   participantId: number;
   isWinner: boolean;
+  tripStatus?: string | null;
   voteMutation: ReturnType<typeof useVoteAlternative>;
   attendanceMutation: ReturnType<typeof useUpdateAttendance>;
+  lockMutation: ReturnType<typeof useLockTrip>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const committedNames = alt.committedAttendeeNames ?? [];
@@ -656,6 +673,21 @@ function AlternativeCard({
           isPending={attendanceMutation.isPending}
         />
       </div>
+
+      {isWinner && tripStatus === "Almost decided" && (
+        <div className="border-t border-amber-200 dark:border-amber-800 pt-3">
+          <Button
+            className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl h-9 text-xs font-bold"
+            onClick={() => lockMutation.mutate({ alternativeId: alt.id })}
+            disabled={lockMutation.isPending}
+            isLoading={lockMutation.isPending}
+            data-testid={`button-lock-trip-${alt.id}`}
+          >
+            <Lock className="w-3.5 h-3.5" />
+            Lock this trip
+          </Button>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -680,8 +712,10 @@ function TravelWorkspace({
 }) {
   const voteMutation = useVoteAlternative(groupId);
   const attendanceMutation = useUpdateAttendance(groupId);
+  const lockMutation = useLockTrip(groupId);
 
   const winnerAltId = trip?.winningAlternativeId;
+  const isLocked = trip?.status === "Trip locked";
 
   const activeAlternatives = alternatives.filter((a) => a.status === "active");
 
@@ -709,7 +743,15 @@ function TravelWorkspace({
           <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={onCopyLink} data-testid="button-copy-link">
             <Copy className="w-3.5 h-3.5" /> Invite Link
           </Button>
-          <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={onShareSummary} data-testid="button-share-trip-summary">
+          <Button
+            variant={isLocked ? "default" : "outline"}
+            className={cn(
+              "flex-1 gap-1.5 rounded-xl text-xs h-9",
+              isLocked && "bg-emerald-600 hover:bg-emerald-700 text-white border-0 ring-2 ring-emerald-400 ring-offset-1"
+            )}
+            onClick={onShareSummary}
+            data-testid="button-share-trip-summary"
+          >
             <Share2 className="w-3.5 h-3.5" /> Share Summary
           </Button>
         </div>
@@ -759,8 +801,10 @@ function TravelWorkspace({
                       groupId={groupId}
                       participantId={participantId}
                       isWinner={alt.id === winnerAltId}
+                      tripStatus={trip?.status}
                       voteMutation={voteMutation}
                       attendanceMutation={attendanceMutation}
+                      lockMutation={lockMutation}
                     />
                   ))}
                 </AnimatePresence>

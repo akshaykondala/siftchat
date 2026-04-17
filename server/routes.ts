@@ -342,6 +342,38 @@ export async function registerRoutes(
     }
   });
 
+  // === TRIP LOCK ===
+
+  app.post(api.tripLock.lock.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { alternativeId } = req.body as { alternativeId?: number };
+
+    const trip = await storage.getTripPlanByGroup(groupId);
+    if (!trip) {
+      return res.status(404).json({ message: "Trip plan not found" });
+    }
+
+    let dest = trip.destination;
+    if (alternativeId) {
+      const alt = await storage.getTripAlternativeById(alternativeId);
+      if (alt?.destination) dest = alt.destination;
+    }
+
+    await storage.upsertTripPlan(groupId, {
+      confidenceScore: 100,
+      status: "Trip locked",
+      winningAlternativeId: alternativeId ?? trip.winningAlternativeId,
+    });
+
+    const destLabel = dest ? ` to ${dest}` : "";
+    await storage.createPipMessage(
+      groupId,
+      `🔒 The trip${destLabel} is officially locked! Congrats everyone — time to get packing! Share the trip summary to let everyone know the final plan.`
+    );
+
+    res.json({ success: true });
+  });
+
   // === PIP MESSAGES (dedicated endpoint) ===
 
   app.get(api.pipMessages.list.path, async (req, res) => {

@@ -3,6 +3,7 @@ import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
 import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance } from "@/hooks/use-trip";
+import { usePresence } from "@/hooks/use-presence";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -18,6 +19,68 @@ import {
   Heart, AlertCircle, UserCheck,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel } from "@shared/schema";
+
+// ─── Presence Avatar ────────────────────────────────────────────────────────────
+function PresenceAvatar({ name, size = "sm" }: { name: string; size?: "sm" | "xs" }) {
+  const initials = name
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  // Deterministic color from name
+  const colors = [
+    "bg-violet-500", "bg-indigo-500", "bg-teal-500",
+    "bg-amber-500", "bg-rose-500", "bg-emerald-500",
+    "bg-sky-500", "bg-orange-500",
+  ];
+  const idx = name.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % colors.length;
+  const bg = colors[idx];
+
+  return (
+    <div
+      className={cn(
+        "rounded-full flex items-center justify-center text-white font-bold shrink-0",
+        bg,
+        size === "sm" ? "h-7 w-7 text-xs" : "h-5 w-5 text-[9px]"
+      )}
+      title={name}
+    >
+      {initials}
+    </div>
+  );
+}
+
+// ─── Typing Indicator ───────────────────────────────────────────────────────────
+function TypingIndicator({ names }: { names: string[] }) {
+  const label =
+    names.length === 1
+      ? `${names[0]} is typing…`
+      : names.length === 2
+      ? `${names[0]} and ${names[1]} are typing…`
+      : `${names[0]} and ${names.length - 1} others are typing…`;
+
+  return (
+    <div
+      className="flex items-center gap-2 px-4 pb-1 min-h-[20px]"
+      data-testid="typing-indicator"
+    >
+      <div className="flex gap-0.5">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 animate-bounce"
+            style={{ animationDelay: `${i * 0.15}s`, animationDuration: "0.9s" }}
+          />
+        ))}
+      </div>
+      <span className="text-xs text-muted-foreground/70 italic" data-testid="typing-indicator-text">
+        {label}
+      </span>
+    </div>
+  );
+}
 
 // ─── Confidence Pill ───────────────────────────────────────────────────────────
 function ConfidencePill({ status }: { status: string }) {
@@ -646,6 +709,9 @@ export default function GroupPage() {
   const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const isTyping = messageText.trim().length > 0;
+  const { otherOnline, typingUsers } = usePresence(group?.id ?? 0, participantId, isTyping);
+
   const copyLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}/g/${slug}`);
     toast({ title: "Link Copied!", description: "Share it with your crew." });
@@ -805,6 +871,30 @@ export default function GroupPage() {
               </span>
             )}
           </div>
+
+          {/* Online presence avatars */}
+          {otherOnline.length > 0 && (
+            <div
+              className="flex items-center gap-1 shrink-0 mx-2"
+              data-testid="presence-avatars"
+              aria-label={`${otherOnline.length} other${otherOnline.length !== 1 ? "s" : ""} online`}
+            >
+              <div className="flex -space-x-1.5">
+                {otherOnline.slice(0, 4).map((u) => (
+                  <PresenceAvatar key={u.participantId} name={u.name} size="sm" />
+                ))}
+                {otherOnline.length > 4 && (
+                  <div className="h-7 w-7 rounded-full bg-muted border border-background flex items-center justify-center text-[10px] font-bold text-muted-foreground">
+                    +{otherOnline.length - 4}
+                  </div>
+                )}
+              </div>
+              <span className="text-[11px] text-muted-foreground hidden sm:inline ml-1" data-testid="presence-count">
+                {otherOnline.length} online
+              </span>
+            </div>
+          )}
+
           <div className="flex items-center gap-1.5 shrink-0">
             <Button
               variant="outline"
@@ -857,6 +947,11 @@ export default function GroupPage() {
           </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Typing indicator */}
+        {typingUsers.length > 0 && (
+          <TypingIndicator names={typingUsers.map((u) => u.name)} />
+        )}
 
         {/* Input */}
         <div className="p-4 bg-background border-t shrink-0">

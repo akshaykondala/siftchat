@@ -6,6 +6,54 @@ import { z } from "zod";
 import { openai } from "./replit_integrations/audio/client";
 import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
 
+// ============================================================
+//  IN-MEMORY PRESENCE STORE
+// ============================================================
+
+interface PresenceEntry {
+  participantId: number;
+  name: string;
+  lastSeenAt: number; // ms since epoch
+  isTyping: boolean;
+  typingClearedAt?: number; // auto-clear typing after this time
+}
+
+// groupId -> Map<participantId, PresenceEntry>
+const presenceStore = new Map<number, Map<number, PresenceEntry>>();
+
+const ONLINE_TIMEOUT_MS = 30_000;   // 30s — participant is "online"
+const TYPING_TIMEOUT_MS = 20_000;   // 20s — safety net auto-clear; client refreshes every 2s while actively typing
+
+function getGroupPresence(groupId: number): Map<number, PresenceEntry> {
+  if (!presenceStore.has(groupId)) {
+    presenceStore.set(groupId, new Map());
+  }
+  return presenceStore.get(groupId)!;
+}
+
+function getOnlinePresence(groupId: number): PresenceEntry[] {
+  const group = getGroupPresence(groupId);
+  const now = Date.now();
+  const online: PresenceEntry[] = [];
+  for (const [pid, entry] of group.entries()) {
+    if (now - entry.lastSeenAt < ONLINE_TIMEOUT_MS) {
+      // Auto-clear stale typing signals
+      if (entry.isTyping && entry.typingClearedAt && now > entry.typingClearedAt) {
+        entry.isTyping = false;
+      }
+      online.push({ ...entry });
+    } else {
+      // Prune expired participant entries to avoid unbounded memory growth
+      group.delete(pid);
+    }
+  }
+  // Remove the group map entirely when it becomes empty
+  if (group.size === 0) {
+    presenceStore.delete(groupId);
+  }
+  return online;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -289,6 +337,59 @@ export async function registerRoutes(
     const groupId = Number(req.params.groupId);
     const msgs = await storage.getPipMessagesByGroup(groupId);
     res.json(msgs);
+  });
+
+  // === PRESENCE ===
+
+  // GET /api/groups/:groupId/presence — returns online participants and typing status
+  app.get("/api/groups/:groupId/presence", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    if (!groupId) return res.status(400).json({ message: "Invalid groupId" });
+
+    const group = await storage.getGroupById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+
+    const online = getOnlinePresence(groupId);
+    res.json(online.map(e => ({
+      participantId: e.participantId,
+      name: e.name,
+      isTyping: e.isTyping,
+    })));
+  });
+
+  // POST /api/groups/:groupId/presence — heartbeat + typing update
+  app.post("/api/groups/:groupId/presence", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const bodySchema = z.object({
+      participantId: z.number(),
+      isTyping: z.boolean().optional().default(false),
+    });
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid request" });
+    }
+
+    const { participantId, isTyping } = parsed.data;
+
+    // Validate participant belongs to this group
+    const participant = await storage.getParticipant(participantId);
+    if (!participant || participant.groupId !== groupId) {
+      return res.status(403).json({ message: "Invalid participant" });
+    }
+
+    const group = getGroupPresence(groupId);
+    const now = Date.now();
+    const existing = group.get(participantId);
+
+    group.set(participantId, {
+      participantId,
+      name: participant.name,
+      lastSeenAt: now,
+      isTyping: isTyping ?? false,
+      typingClearedAt: isTyping ? now + TYPING_TIMEOUT_MS : existing?.typingClearedAt,
+    });
+
+    res.json({ ok: true });
   });
 
   return httpServer;

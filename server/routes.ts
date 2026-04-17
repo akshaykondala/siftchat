@@ -125,6 +125,9 @@ export async function registerRoutes(
     res.json(plan);
   });
 
+  // DEPRECATED: This endpoint now runs analyzeTripChat but does NOT write to the legacy plans table.
+  // New clients should use GET /api/groups/:groupId/trip and the trip/alternatives endpoints instead.
+  // Legacy plans.summary will remain empty/stale — this endpoint is preserved for backward compat only.
   app.post(api.plans.generate.path, async (req, res) => {
     const groupId = Number(req.params.groupId);
     try {

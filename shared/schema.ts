@@ -90,7 +90,7 @@ export const supportSignals = pgTable("support_signals", {
   participantId: integer("participant_id").notNull(),
   alternativeId: integer("alternative_id"), // null = main plan
   commitmentLevel: text("commitment_level").notNull(), // interested | likely | committed | unavailable
-  source: text("source").default("ai"), // "ai" | "explicit"
+  source: text("source").notNull().default("ai"), // "ai" | "explicit"
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

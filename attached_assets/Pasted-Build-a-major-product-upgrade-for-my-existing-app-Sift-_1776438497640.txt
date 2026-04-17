@@ -1,0 +1,434 @@
+Build a major product upgrade for my existing app, Sift Chat.
+
+Current product:
+- Group-based planning app with shareable links
+- No account required to join, users type a name
+- Real-time group chat polling every 3 seconds
+- AI reads the chat and extracts a structured main plan with “When” and “Where”
+- AI surfaces alternatives and supports voting
+- Most popular option becomes the main plan
+- Attendance is inferred from support and votes
+- Returning users can continue as themselves via saved browser ID
+- Share Plan button copies a clean summary
+- Frontend uses Shadcn/ui, Tailwind, Framer Motion, violet/indigo aesthetic
+- Backend is Express 5 + PostgreSQL + Drizzle ORM + OpenAI via Replit AI integration
+
+I want to evolve Sift Chat into a travel-focused group decision product, but NOT a full itinerary builder like Wanderlog. The product should feel different: it should specialize in helping groups go from vague interest and chaotic discussion to an actual locked trip decision.
+
+Core product direction:
+Sift Chat should own the “decision before booking” phase of group travel.
+It should help groups answer:
+- Where should we go?
+- When should we go?
+- Who is actually in?
+- What budget works?
+- What trip style are we doing?
+- Which option has the strongest real support?
+
+Do NOT build:
+- reservation imports
+- full itinerary builder
+- flight booking
+- hotel booking
+- expense splitting
+- complex day-by-day planning UI
+
+Instead, build:
+1. A travel-aware planning workspace layered on top of the existing group chat
+2. AI-generated trip options based on group discussion
+3. Voting and support tracking for full trip bundles
+4. A stronger plan state that reflects confidence and commitment
+5. A helper AI inside the chat that can guide the group toward consensus
+
+Main concept:
+The app should no longer only extract “When” and “Where.”
+It should build a structured “Trip Plan” object with:
+- destination
+- date range
+- budget band
+- trip vibe / type
+- lodging preference
+- likely attendees
+- committed attendees
+- unresolved questions
+- ranked alternatives
+
+Product behavior:
+As group members chat naturally, the AI should detect travel intent and gradually structure the trip.
+People should still be able to type casually, but the app should extract and maintain trip state live.
+
+Examples of messages users might send:
+- “beach trip in may?”
+- “I can only do memorial weekend”
+- “under 600 total please”
+- “I’m down for miami or san diego”
+- “I’d rather do a cabin than a hotel”
+- “I can only go if we leave friday night”
+- “I’m interested but not 100% booked yet”
+
+The app should interpret this and update the structured trip planning UI without requiring forms.
+
+NEW UX / UI REQUIREMENTS
+
+Create a new travel-focused group page layout with these sections:
+
+1. Top header
+- Group / trip name
+- Invite / copy link button
+- Share Trip Summary button
+- Small status pill showing current trip confidence, for example:
+  - “Early ideas”
+  - “Narrowing options”
+  - “Almost decided”
+  - “Trip locked”
+
+2. Main Trip Card
+This replaces the old simple “When / Where” plan card.
+It should show:
+- Destination
+- Dates
+- Budget
+- Vibe
+- Lodging style
+- Who’s likely in
+- Who’s committed
+- Confidence level
+- Last AI update timestamp
+
+If the AI is not confident yet, fields can show placeholders like:
+- “Still deciding”
+- “Not enough agreement yet”
+- “Two strong options remain”
+
+3. Alternatives section
+This is very important.
+Instead of simple alternatives for only time or place, create trip bundle alternatives.
+Each alternative card should represent a bundled option like:
+- Miami · May 24–27 · Budget-friendly beach weekend
+- Austin cabin · June 7–9 · Chill low-cost drive trip
+- San Diego · July 12–15 · Higher-budget sunny city trip
+
+Each alternative should show:
+- destination
+- date range
+- budget band
+- short AI-generated label
+- support count
+- vote count
+- likely attendees
+- committed attendees
+- why this option exists / what signals created it
+
+Allow users to vote on an alternative.
+Allow the current winning alternative to automatically become the main Trip Card.
+Support should combine:
+- explicit votes
+- AI-detected natural-language support from chat
+
+4. Chat panel
+Keep the live group chat.
+Messages still poll every 3 seconds.
+Add clearer distinction between:
+- user messages
+- system updates
+- AI helper messages
+
+5. Side / bottom planning strip
+Add lightweight structured chips or cards showing the current detected group signals:
+- possible destinations
+- possible dates
+- budget signals
+- vibe signals
+- lodging preferences
+- attendance / commitment signals
+This should feel dynamic and extracted from chat, not manually form-filled.
+
+AI HELPER REQUIREMENTS
+
+Add a cute one-word AI helper bot named: Pip
+
+Pip should appear in the chat as an AI planning assistant for the group.
+Pip must not dominate the conversation or feel spammy.
+Pip should speak only when useful.
+
+Pip’s role:
+- summarize the state of discussion
+- suggest 2–3 strongest trip options
+- identify conflicts
+- ask clarifying questions when necessary
+- encourage the group toward consensus
+- explain why the current main option is winning
+- announce when the main plan shifts
+- point out when support is soft vs actually committed
+
+Examples of good Pip behaviors:
+- “Right now Miami on Memorial weekend has the strongest support, but the budget concern is still unresolved.”
+- “Two strong options are emerging: San Diego in July and an Austin cabin in June.”
+- “I’m seeing 5 people interested in a beach trip, but only 3 who clearly supported the May dates.”
+- “Looks like cabin > hotel is the dominant lodging preference so far.”
+- “This plan is leading because it has the most destination support and the strongest attendance signal.”
+
+Pip should intervene when:
+- a new strong option appears
+- there are multiple conflicting options
+- the group seems stuck
+- enough evidence exists to update the main plan
+- a clarification question would reduce ambiguity
+
+Pip should not intervene:
+- after every message
+- when nothing materially changed
+- with overly long responses
+
+AI / PRODUCT LOGIC REQUIREMENTS
+
+Implement a stronger plan extraction model than the current “when / where” approach.
+
+Create travel planning entities / concepts:
+- TripPlan
+- TripAlternative
+- SupportSignal
+- AttendanceSignal
+- CommitmentLevel
+- PipMessage
+
+TripPlan should include:
+- id
+- groupId
+- title
+- destination
+- startDate
+- endDate
+- budgetBand
+- vibe
+- lodgingPreference
+- confidenceScore
+- status
+- likelyAttendeeCount
+- committedAttendeeCount
+- unresolvedQuestions
+- winningAlternativeId
+- updatedAt
+
+TripAlternative should include:
+- id
+- groupId
+- destination
+- startDate
+- endDate
+- budgetBand
+- vibe
+- lodgingPreference
+- aiSummary
+- supportScore
+- voteCount
+- likelyAttendeeCount
+- committedAttendeeCount
+- evidenceSummary
+- status
+- createdAt
+- updatedAt
+
+SupportSignal should represent AI-detected support from messages, for example:
+- user likes destination
+- user can attend date
+- user prefers budget range
+- user rejects option
+- user is maybe attending
+- user is definitely attending
+
+CommitmentLevel values:
+- interested
+- likely
+- committed
+- unavailable
+
+Important logic:
+The leading option should be based on a combined score, not raw votes alone.
+Use a weighted formula conceptually like:
+- explicit vote weight
+- natural-language support weight
+- commitment strength weight
+- conflict penalty
+- recency boost if discussion shifts
+
+You do not need perfect ML. Use practical AI extraction plus heuristics.
+
+Examples:
+- “I’m down for Miami” = support signal
+- “I can only do June 1–3” = date constraint
+- “I’m maybe in” = likely, not committed
+- “Book me, I’m in” = committed
+- “Too expensive” = negative budget signal
+- “Not that weekend” = conflict
+
+The main Trip Plan should auto-update as new evidence comes in.
+
+TRIP CONFIDENCE / STATUS SYSTEM
+
+Add a simple confidence/status system that makes the app feel smart:
+- Early ideas
+- Narrowing options
+- Almost decided
+- Trip locked
+
+Status should depend on:
+- amount of discussion
+- strength of option clustering
+- number of conflicts unresolved
+- percentage of attendees with clear support
+- number of committed people
+
+Trip locked should mean:
+- there is one clearly dominant option
+- there is decent support
+- conflicts are relatively low
+- enough people are likely or committed
+
+ATTENDANCE MODEL
+
+Preserve the current attendance concept but make it more nuanced for travel.
+Each user can have a stance toward each alternative:
+- interested
+- likely
+- committed
+- unavailable
+
+Users can still express this naturally in chat.
+Optionally add quick action buttons on alternative cards:
+- Interested
+- Likely
+- I’m in
+- Can’t make it
+
+Those button presses should complement AI-detected signals, not replace them.
+
+SHARE TRIP SUMMARY
+
+Upgrade the Share Plan button into a travel-specific Share Trip Summary feature.
+Copy a clean, text-message-friendly summary like:
+
+Trip: Beach Weekend
+Current Plan: Miami, May 24–27
+Budget: Moderate
+Vibe: beach + nightlife
+Lodging: Airbnb
+Likely going: Akshay, Maya, Chris, Dev
+Committed: Maya, Chris
+Still deciding: exact budget cap
+Join / vote: [invite link]
+
+Make it polished and compact.
+
+RETURNING USER FLOW
+
+Keep the Welcome Back flow.
+When someone returns, offer:
+- Continue as [saved name]
+- Join as someone new
+
+Ensure their past signals and attendance mappings reconnect properly if they continue as themselves.
+
+DESIGN DIRECTION
+
+Keep the current Sift Chat identity but evolve it into a stylish travel-planning experience.
+Design should still use:
+- violet / indigo palette
+- Shadcn/ui
+- Tailwind
+- Framer Motion
+- Outfit and DM Sans
+
+UI should feel:
+- polished
+- modern
+- social
+- clear
+- not cluttered
+- more premium than a school project
+
+Travel flavor should come from:
+- wording
+- card structure
+- subtle iconography
+- planning chips
+- motion / transitions
+Not from cheesy beach graphics or over-the-top travel art.
+
+TECHNICAL IMPLEMENTATION
+
+Use my existing stack:
+- frontend: React + Tailwind + Shadcn/ui + Framer Motion
+- backend: Express 5
+- database: PostgreSQL
+- ORM: Drizzle
+- AI: OpenAI through Replit AI integration
+
+Implement:
+1. schema updates for TripPlan, TripAlternative, signals, and commitment states
+2. API endpoints to:
+   - fetch group trip state
+   - fetch alternatives
+   - vote / support an alternative
+   - update attendance stance
+   - trigger AI analysis
+   - fetch Pip messages
+3. backend AI pipeline that:
+   - reads recent chat messages
+   - extracts destinations, date ranges, budgets, vibes, lodging preferences, support, and conflicts
+   - updates alternatives
+   - updates main Trip Plan
+   - decides whether Pip should post a message
+4. frontend UI refresh for the new travel planning layout
+5. optimistic updates where reasonable
+6. graceful loading and empty states
+
+AI EXTRACTION STRATEGY
+
+Use structured AI outputs when possible.
+Have the model return JSON for:
+- detected destinations
+- detected dates
+- budget mentions
+- vibe mentions
+- lodging mentions
+- support signals
+- rejection signals
+- attendance confidence
+- alternative candidates
+- unresolved questions
+- recommended Pip message if needed
+
+Then apply backend scoring / normalization logic before storing.
+
+Be conservative:
+- do not hallucinate specifics not supported by the chat
+- preserve uncertainty
+- keep alternatives explainable
+
+Important principle:
+The AI should feel assistive and credible, not magical and random.
+
+MVP PRIORITIES
+
+If implementation time is limited, prioritize in this order:
+1. new Trip Card and travel-aware structured state
+2. bundled trip alternatives with support + voting
+3. Pip AI helper in chat
+4. attendance / commitment tiers
+5. upgraded share summary
+6. polish and animations
+
+SUCCESS CRITERIA
+
+The finished product should make a group feel like:
+- we can casually discuss a trip in chat
+- the app understands what we’re converging on
+- the app surfaces the best options automatically
+- the app knows who is actually in vs just interested
+- the app helps us lock a trip faster than a normal group chat
+
+It should feel distinct from itinerary planners.
+It should feel like an AI-powered group trip consensus engine.
+
+Now implement this thoroughly across frontend, backend, schema, and AI logic while preserving the current Sift Chat foundation.

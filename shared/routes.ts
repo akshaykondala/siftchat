@@ -122,6 +122,21 @@ export const api = {
     },
   },
   tripAttendance: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/groups/:groupId/trip/attendance',
+      responses: {
+        200: z.array(z.object({
+          id: z.number(),
+          groupId: z.number(),
+          participantId: z.number(),
+          alternativeId: z.number().nullable(),
+          commitmentLevel: z.string(),
+          source: z.string(),
+          updatedAt: z.string().nullable(),
+        })),
+      },
+    },
     update: {
       method: 'POST' as const,
       path: '/api/groups/:groupId/trip/attendance',

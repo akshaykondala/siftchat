@@ -289,6 +289,17 @@ export async function registerRoutes(
 
   // === TRIP ATTENDANCE / SUPPORT SIGNALS (explicit button presses) ===
 
+  app.get(api.tripAttendance.get.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const participantId = req.query.participantId ? Number(req.query.participantId) : null;
+    if (participantId !== null && !isNaN(participantId)) {
+      const signals = await storage.getSupportSignalsByParticipant(groupId, participantId);
+      return res.json(signals);
+    }
+    const signals = await storage.getSupportSignalsByGroup(groupId);
+    res.json(signals);
+  });
+
   app.post(api.tripAttendance.update.path, async (req, res) => {
     const groupId = Number(req.params.groupId);
     try {

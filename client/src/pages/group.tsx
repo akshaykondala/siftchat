@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance } from "@/hooks/use-trip";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance } from "@/hooks/use-trip";
 import { usePresence } from "@/hooks/use-presence";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,7 @@ import {
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
   Heart, AlertCircle, UserCheck,
 } from "lucide-react";
-import type { TripPlan, TripAlternative, CommitmentLevel } from "@shared/schema";
+import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
 
 // ─── Presence Avatar ────────────────────────────────────────────────────────────
 function PresenceAvatar({ name, size = "sm" }: { name: string; size?: "sm" | "xs" }) {
@@ -390,6 +390,142 @@ function AttendanceButtons({
   );
 }
 
+// ─── My Status Card ────────────────────────────────────────────────────────────
+const COMMITMENT_CONFIG: Record<CommitmentLevel, { label: string; color: string; dot: string }> = {
+  committed: { label: "I'm in", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", dot: "bg-emerald-500" },
+  likely: { label: "Likely", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300", dot: "bg-indigo-500" },
+  interested: { label: "Interested", color: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400", dot: "bg-zinc-400" },
+  unavailable: { label: "Can't go", color: "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400", dot: "bg-red-400" },
+};
+
+function buildSummaryLine(signals: SupportSignal[], alternatives: TripAlternative[], hasMainPlan: boolean): string {
+  if (signals.length === 0) return "Set your stance on each option below.";
+
+  // Deduplicate: prefer explicit signals over AI signals per alternativeId slot
+  const slotMap = new Map<string | number, SupportSignal>();
+  for (const sig of signals) {
+    const key = sig.alternativeId ?? "main";
+    const existing = slotMap.get(key);
+    if (!existing || (sig.source === "explicit" && existing.source !== "explicit")) {
+      slotMap.set(key, sig);
+    }
+  }
+
+  const parts: string[] = [];
+
+  for (const sig of slotMap.values()) {
+    const level = sig.commitmentLevel as CommitmentLevel;
+    const cfg = COMMITMENT_CONFIG[level];
+    if (!cfg) continue;
+
+    let dest: string;
+    if (sig.alternativeId === null) {
+      dest = "the main plan";
+    } else {
+      const alt = alternatives.find((a) => a.id === sig.alternativeId);
+      dest = alt?.destination ?? "an option";
+    }
+
+    if (level === "committed") parts.push(`in for ${dest}`);
+    else if (level === "likely") parts.push(`likely for ${dest}`);
+    else if (level === "interested") parts.push(`interested in ${dest}`);
+    else if (level === "unavailable") parts.push(`unavailable for ${dest}`);
+  }
+
+  if (parts.length === 0) return "Set your stance on each option below.";
+  return "You're " + parts.join(", ") + ".";
+}
+
+function MyStatusCard({
+  groupId,
+  participantId,
+  alternatives,
+  trip,
+  attendanceMutation,
+}: {
+  groupId: number;
+  participantId: number;
+  alternatives: TripAlternative[];
+  trip: TripPlan | null | undefined;
+  attendanceMutation: ReturnType<typeof useUpdateAttendance>;
+}) {
+  const { data: mySignals = [] } = useMyAttendance(groupId, participantId);
+
+  const activeAlts = alternatives.filter((a) => a.status === "active");
+  const hasMainPlan = !!trip;
+
+  const getSignal = (alternativeId: number | null): SupportSignal | undefined => {
+    const matching = alternativeId === null
+      ? mySignals.filter((s) => s.alternativeId === null)
+      : mySignals.filter((s) => s.alternativeId === alternativeId);
+    return matching.find((s) => s.source === "explicit") ?? matching[0];
+  };
+
+  const summaryLine = buildSummaryLine(mySignals, alternatives, hasMainPlan);
+
+  const stanceButtons: { level: CommitmentLevel; label: string }[] = [
+    { level: "committed", label: "I'm in" },
+    { level: "likely", label: "Likely" },
+    { level: "interested", label: "Interested" },
+    { level: "unavailable", label: "Can't go" },
+  ];
+
+  const renderStanceRow = (label: string, alternativeId: number | null, testSuffix: string) => {
+    const signal = getSignal(alternativeId);
+    const currentLevel = signal?.commitmentLevel as CommitmentLevel | undefined;
+    return (
+      <div key={testSuffix} className="space-y-1.5" data-testid={`my-status-row-${testSuffix}`}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-foreground truncate flex-1">{label}</span>
+          {currentLevel && COMMITMENT_CONFIG[currentLevel] && (
+            <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold", COMMITMENT_CONFIG[currentLevel].color)} data-testid={`my-status-badge-${testSuffix}`}>
+              <span className={cn("w-1.5 h-1.5 rounded-full", COMMITMENT_CONFIG[currentLevel].dot)} />
+              {COMMITMENT_CONFIG[currentLevel].label}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1" data-testid={`my-status-buttons-${testSuffix}`}>
+          {stanceButtons.map(({ level, label: btnLabel }) => (
+            <button
+              key={level}
+              onClick={() => attendanceMutation.mutate({ participantId, alternativeId, commitmentLevel: level })}
+              disabled={attendanceMutation.isPending}
+              className={cn(
+                "px-2 py-0.5 rounded-full text-[11px] font-medium transition-all border",
+                currentLevel === level
+                  ? cn(COMMITMENT_CONFIG[level].color, "border-current opacity-100 ring-1 ring-current/30")
+                  : "bg-transparent text-muted-foreground border-border hover:border-primary/30 hover:text-foreground",
+                attendanceMutation.isPending && "opacity-50 cursor-not-allowed"
+              )}
+              data-testid={`my-status-toggle-${level}-${testSuffix}`}
+            >
+              {btnLabel}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  if (!hasMainPlan && activeAlts.length === 0) return null;
+
+  return (
+    <div className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/40 to-indigo-50/40 dark:from-violet-950/10 dark:to-indigo-950/10 p-4 space-y-3" data-testid="card-my-status">
+      <div className="flex items-center gap-2">
+        <UserCheck className="w-4 h-4 text-primary/60 shrink-0" />
+        <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">My Status</span>
+      </div>
+      <p className="text-xs text-muted-foreground leading-relaxed" data-testid="my-status-summary">{summaryLine}</p>
+      <div className="space-y-3 pt-1">
+        {hasMainPlan && activeAlts.length === 0 && renderStanceRow(trip?.destination ? `Main plan · ${trip.destination}` : "Main plan", null, "main")}
+        {activeAlts.map((alt) =>
+          renderStanceRow(alt.destination ?? "Option", alt.id, `alt-${alt.id}`)
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Alternative Card ──────────────────────────────────────────────────────────
 function AlternativeCard({
   alt,
@@ -592,6 +728,19 @@ function TravelWorkspace({
             <div>
               <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Detected Signals</div>
               <PlanningSignalsStrip trip={trip} />
+            </div>
+          )}
+
+          {/* My Status */}
+          {(trip || activeAlternatives.length > 0) && (
+            <div>
+              <MyStatusCard
+                groupId={groupId}
+                participantId={participantId}
+                alternatives={alternatives}
+                trip={trip}
+                attendanceMutation={attendanceMutation}
+              />
             </div>
           )}
 

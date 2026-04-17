@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { api, buildUrl } from "@shared/routes";
-import type { TripPlan, TripAlternative, CommitmentLevel, PipMessage } from "@shared/schema";
+import type { TripPlan, TripAlternative, CommitmentLevel, PipMessage, SupportSignal } from "@shared/schema";
 
 export function useTripPlan(groupId: number) {
   return useQuery<TripPlan | null>({
@@ -71,6 +71,22 @@ export function useVoteAlternative(groupId: number) {
   });
 }
 
+export function useMyAttendance(groupId: number, participantId: number | null) {
+  return useQuery<SupportSignal[]>({
+    queryKey: [api.tripAttendance.get.path, groupId, participantId],
+    queryFn: async () => {
+      if (!participantId) return [];
+      const url = buildUrl(api.tripAttendance.get.path, { groupId }) + `?participantId=${participantId}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!groupId && !!participantId,
+    refetchInterval: 5000,
+    initialData: [],
+  });
+}
+
 export function useUpdateAttendance(groupId: number) {
   return useMutation({
     mutationFn: async ({
@@ -95,6 +111,9 @@ export function useUpdateAttendance(groupId: number) {
       });
       queryClient.invalidateQueries({
         queryKey: [api.tripPlan.get.path, groupId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [api.tripAttendance.get.path, groupId],
       });
     },
   });

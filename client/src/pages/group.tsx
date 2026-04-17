@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, usePipMessages } from "@/hooks/use-trip";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance } from "@/hooks/use-trip";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -386,9 +386,11 @@ function AlternativeCard({
             <Zap className="w-3 h-3" /> {alt.vibe}
           </span>
         )}
-        {(alt.supportScore ?? 0) > 0 && (
+        {((alt.voteCount ?? 0) > 0 || (alt.supportScore ?? 0) > 0) && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">
-            <TrendingUp className="w-3 h-3" /> Score: {Math.round(alt.supportScore ?? 0)}
+            <TrendingUp className="w-3 h-3" />
+            {(alt.voteCount ?? 0)} {(alt.voteCount ?? 0) === 1 ? "vote" : "votes"}
+            {(alt.supportScore ?? 0) > 0 && ` · support score ${Math.round(alt.supportScore ?? 0)}`}
           </span>
         )}
       </div>
@@ -615,26 +617,10 @@ export default function GroupPage() {
   const slug = match ? params.slug : "";
 
   const { data: group, isLoading: groupLoading, error: groupError } = useGroup(slug);
-  const { data: userMessages } = useMessages(group?.id ?? 0);
-  const { data: pipMessagesList = [] } = usePipMessages(group?.id ?? 0);
+  // useMessages returns all messages (user + pip) already interleaved and sorted by the server
+  const { data: messages } = useMessages(group?.id ?? 0);
   const { data: trip } = useTripPlan(group?.id ?? 0);
   const { data: alternatives = [] } = useTripAlternatives(group?.id ?? 0);
-
-  // Merge user messages (non-Pip only) with Pip messages sorted by time
-  const messages = React.useMemo(() => {
-    const users = (userMessages ?? []).filter((m) => !m.isPip);
-    const pips = pipMessagesList.map((p) => ({
-      id: p.id,
-      content: p.content,
-      createdAt: p.createdAt,
-      participantId: null as number | null,
-      participantName: "Pip",
-      isPip: true as const,
-    }));
-    return [...users, ...pips].sort(
-      (a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
-    );
-  }, [userMessages, pipMessagesList]);
 
   const joinGroup = useJoinGroup();
   const sendMessage = useSendMessage();

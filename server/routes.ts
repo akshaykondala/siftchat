@@ -476,10 +476,36 @@ RULES:
     }
   }
 
-  // Determine winning alternative and persist
+  // Store AI per-alternative supporter signals in support_signals table
+  // This ensures score recomputation incorporates both AI and explicit signals uniformly
+  for (const processedAlt of processedAlts) {
+    const aiAlt = alternatives.find(a => alternativesMatch(processedAlt, a));
+    if (!aiAlt) continue;
+
+    const supporterNames = aiAlt.supporterNames ?? [];
+    const committedNames = aiAlt.committedNames ?? [];
+
+    for (const name of supporterNames) {
+      const participant = participantsList.find(p => p.name.toLowerCase() === name.toLowerCase());
+      if (participant) {
+        await storage.upsertSupportSignal(groupId, participant.id, processedAlt.id, "likely", "ai");
+      }
+    }
+    for (const name of committedNames) {
+      const participant = participantsList.find(p => p.name.toLowerCase() === name.toLowerCase());
+      if (participant) {
+        await storage.upsertSupportSignal(groupId, participant.id, processedAlt.id, "committed", "ai");
+      }
+    }
+  }
+
+  // Recompute scores for all processed alternatives from support_signals (AI + explicit combined)
+  for (const alt of processedAlts) {
+    await recomputeAlternativeScore(groupId, alt.id);
+  }
   await recalculateWinner(groupId);
 
-  // Process attendance signals from AI (source="ai")
+  // Process general attendance signals from AI (source="ai") — main plan and cross-option stances
   for (const signal of attendanceSignals) {
     const participant = participantsList.find(
       p => p.name.toLowerCase() === signal.participantName?.toLowerCase()
@@ -502,7 +528,7 @@ RULES:
     }
   }
 
-  // Pip posting: backend material-change evaluation (do not rely solely on AI flag)
+  // Pip posting: trust AI shouldPipSpeak + enforce anti-spam cooldown + backend conditions
   if (pipMessage) {
     const newPlan = await storage.getTripPlanByGroup(groupId);
     const newAlts = await storage.getTripAlternativesByGroup(groupId);
@@ -511,20 +537,22 @@ RULES:
     const lastPipTime = lastPip?.createdAt ? new Date(lastPip.createdAt).getTime() : 0;
     const minutesSinceLastPip = (now - lastPipTime) / (1000 * 60);
 
-    // Compute backend material-change signals
+    // Backend material-change signals (required for non-clarifying cases)
     const destinationChanged = (newPlan?.destination ?? null) !== (previousPlan?.destination ?? null);
     const winnerChanged = (newPlan?.winningAlternativeId ?? null) !== (previousPlan?.winningAlternativeId ?? null);
     const newAltAppeared = newAlts.length > previousAlts.length;
     const confidenceJump = Math.abs((newPlan?.confidenceScore ?? 0) - (previousPlan?.confidenceScore ?? 0)) >= 15;
+    const materialChange = destinationChanged || winnerChanged || newAltAppeared || confidenceJump;
 
-    // Group stuck: many messages since last Pip with no material change
+    // Group stuck: 8+ messages since last Pip with no material change
     const msgsSinceLastPip = previousPipMsgs.length === 0
       ? msgs.length
       : msgs.filter(m => m.createdAt && m.createdAt > new Date(lastPipTime)).length;
-    const groupStuck = msgsSinceLastPip >= 8 && !destinationChanged && !winnerChanged;
+    const groupStuck = msgsSinceLastPip >= 8 && !materialChange;
 
-    const materialChange = destinationChanged || winnerChanged || newAltAppeared || confidenceJump;
-    const shouldPost = (materialChange || groupStuck) && shouldPipSpeak && minutesSinceLastPip >= 3;
+    // Trust shouldPipSpeak from AI (covers clarifying questions, ambiguity reduction, etc.)
+    // Require anti-spam cooldown (3 min). Allow if material change OR group stuck OR AI says speak.
+    const shouldPost = shouldPipSpeak && minutesSinceLastPip >= 3 && (materialChange || groupStuck || shouldPipSpeak);
 
     if (shouldPost) {
       await storage.createPipMessage(groupId, pipMessage);

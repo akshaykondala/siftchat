@@ -140,55 +140,58 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
         <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
       </div>
 
-      {(committedNames.length > 0 || likelyNames.length > 0) && (
-        <div className="pt-2 border-t border-primary/10 space-y-2">
-          {committedNames.length > 0 && (
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 mb-1.5 flex items-center gap-1">
-                <UserCheck className="w-3 h-3" /> Committed
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {committedNames.map((name) => (
-                  <Badge key={name} className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800 text-xs px-2 py-0.5">
-                    {name}
-                  </Badge>
-                ))}
-              </div>
+      <div className="pt-2 border-t border-primary/10 space-y-2">
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 mb-1.5 flex items-center gap-1">
+            <UserCheck className="w-3 h-3" /> Committed
+          </div>
+          {committedNames.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {committedNames.map((name) => (
+                <Badge key={name} className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800 text-xs px-2 py-0.5">
+                  {name}
+                </Badge>
+              ))}
             </div>
-          )}
-          {likelyNames.length > 0 && (
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-400 mb-1.5 flex items-center gap-1">
-                <Heart className="w-3 h-3" /> Likely going
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {likelyNames.map((name) => (
-                  <Badge key={name} variant="outline" className="bg-indigo-50/60 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:border-indigo-800 text-xs px-2 py-0.5">
-                    {name}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground/50 italic">No commitments yet</span>
           )}
         </div>
-      )}
 
-      {(trip.confidenceScore ?? 0) > 0 && (
-        <div className="pt-2 border-t border-primary/10">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Confidence</span>
-            <span className="text-xs font-bold text-primary">{trip.confidenceScore}%</span>
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-400 mb-1.5 flex items-center gap-1">
+            <Heart className="w-3 h-3" /> Likely going
           </div>
-          <div className="h-1.5 bg-primary/10 rounded-full overflow-hidden">
-            <motion.div
-              className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${trip.confidenceScore}%` }}
-              transition={{ duration: 0.8, ease: "easeOut" }}
-            />
-          </div>
+          {likelyNames.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {likelyNames.map((name) => (
+                <Badge key={name} variant="outline" className="bg-indigo-50/60 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:border-indigo-800 text-xs px-2 py-0.5">
+                  {name}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground/50 italic">No likely attendees yet</span>
+          )}
         </div>
-      )}
+      </div>
+
+      <div className="pt-2 border-t border-primary/10">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Confidence</span>
+          <span className="text-xs font-bold text-primary">
+            {(trip.confidenceScore ?? 0) > 0 ? `${trip.confidenceScore}%` : "Calculating…"}
+          </span>
+        </div>
+        <div className="h-1.5 bg-primary/10 rounded-full overflow-hidden">
+          <motion.div
+            className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full"
+            initial={{ width: 0 }}
+            animate={{ width: `${trip.confidenceScore ?? 0}%` }}
+            transition={{ duration: 0.8, ease: "easeOut" }}
+          />
+        </div>
+      </div>
 
       {trip.updatedAt && (
         <div className="text-[10px] text-muted-foreground/60 text-right" data-testid="text-last-updated">
@@ -790,38 +793,39 @@ export default function GroupPage() {
       <div className={cn(
         "flex-1 flex flex-col h-full relative min-w-0",
         "lg:flex",
-        mobileTab === "plan" ? "hidden" : "flex"
+        mobileTab === "plan" ? "hidden" : "flex",
+        "pb-14 lg:pb-0" // bottom padding clears the fixed mobile tab bar
       )}>
         {/* Header */}
         <header className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <div className="font-bold text-lg truncate font-display">{group.name}</div>
             {trip?.status && (
-              <span className="shrink-0">
+              <span className="shrink-0" data-testid="status-confidence-pill">
                 <ConfidencePill status={trip.status} />
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground hover:text-primary h-8 w-8"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
               onClick={copyLink}
-              title="Copy invite link"
               data-testid="button-copy-link-header"
             >
-              <Copy className="w-4 h-4" />
+              <Copy className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline ml-1.5">Copy Link</span>
             </Button>
             <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground hover:text-primary h-8 w-8"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
               onClick={shareTripSummary}
-              title="Share trip summary"
               data-testid="button-share-summary-header"
             >
-              <Share2 className="w-4 h-4" />
+              <Share2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline ml-1.5">Share</span>
             </Button>
           </div>
         </header>

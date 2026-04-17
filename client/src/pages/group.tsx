@@ -111,7 +111,7 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
   const effectiveDest = winnerAlt?.destination || trip.destination;
   const effectiveDates = winnerAlt?.dateRange
     || (trip.startDate && trip.endDate ? `${trip.startDate} → ${trip.endDate}` : trip.startDate || trip.endDate || null);
-  const effectiveBudget = winnerAlt?.budget || trip.budgetBand;
+  const effectiveBudget = winnerAlt?.budgetBand || trip.budgetBand;
   const effectiveVibe = winnerAlt?.vibe || trip.vibe;
 
   const likelyNames = (winnerAlt?.likelyAttendeeNames ?? trip.likelyAttendeeNames) ?? [];
@@ -663,7 +663,7 @@ export default function GroupPage() {
     const effectiveDest = winnerAlt?.destination || t?.destination;
     const effectiveDates = winnerAlt?.dateRange
       || ([t?.startDate, t?.endDate].filter(Boolean).join(" → ") || null);
-    const effectiveBudget = winnerAlt?.budget || t?.budgetBand;
+    const effectiveBudget = winnerAlt?.budgetBand || t?.budgetBand;
     const effectiveVibe = winnerAlt?.vibe || t?.vibe;
 
     let text = `✈️ ${groupName}\n`;
@@ -883,9 +883,8 @@ export default function GroupPage() {
       </div>
 
       {/* ── RIGHT: Travel Workspace ──
-           Desktop: static side panel
-           Mobile tab mode: full-width inline (not a slide-over)
-           Mobile overlay mode: slide-over (from sparkles button) ── */}
+           Desktop: static side panel (w-96/w-420)
+           Mobile tab mode (mobileTab="plan"): full-width inline panel ── */}
       <div className={cn(
         "lg:block lg:h-full lg:overflow-hidden",
         mobileTab === "plan" ? "block h-full flex-1" : "hidden"

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, boolean, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -27,18 +27,78 @@ export const messages = pgTable("messages", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Legacy plan table — preserved for backwards compatibility
 export const plans = pgTable("plans", {
   id: serial("id").primaryKey(),
-  groupId: integer("group_id").notNull().unique(), // One plan per group
-  summary: text("summary").default(""), // AI generated summary
+  groupId: integer("group_id").notNull().unique(),
+  summary: text("summary").default(""),
   lastUpdatedAt: timestamp("last_updated_at").defaultNow(),
 });
 
+// Legacy vote table — preserved for backwards compatibility
 export const planVotes = pgTable("plan_votes", {
   id: serial("id").primaryKey(),
   groupId: integer("group_id").notNull(),
   participantId: integer("participant_id").notNull(),
-  alternativeIndex: integer("alternative_index").notNull(), // Which alternative they voted for (0, 1, 2...)
+  alternativeIndex: integer("alternative_index").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// === NEW TRAVEL PLANNING TABLES ===
+
+export const tripPlans = pgTable("trip_plans", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull().unique(),
+  destination: text("destination"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  budgetBand: text("budget_band"),
+  vibe: text("vibe"),
+  lodgingPreference: text("lodging_preference"),
+  confidenceScore: integer("confidence_score").default(0),
+  status: text("status").default("Early ideas"),
+  likelyAttendeeNames: text("likely_attendee_names").array(),
+  committedAttendeeNames: text("committed_attendee_names").array(),
+  unresolvedQuestions: text("unresolved_questions").array(),
+  winningAlternativeId: integer("winning_alternative_id"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const tripAlternatives = pgTable("trip_alternatives", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  destination: text("destination"),
+  dateRange: text("date_range"),
+  budgetBand: text("budget_band"),
+  vibe: text("vibe"),
+  lodgingPreference: text("lodging_preference"),
+  aiSummary: text("ai_summary"),
+  supportScore: real("support_score").default(0),
+  voteCount: integer("vote_count").default(0),
+  likelyAttendeeNames: text("likely_attendee_names").array(),
+  committedAttendeeNames: text("committed_attendee_names").array(),
+  evidenceSummary: text("evidence_summary"),
+  status: text("status").default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Tracks per-participant commitment level toward each alternative (or main plan when alternativeId is null)
+export const tripAttendance = pgTable("trip_attendance", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  participantId: integer("participant_id").notNull(),
+  alternativeId: integer("alternative_id"), // null = main plan
+  commitmentLevel: text("commitment_level").notNull(), // interested | likely | committed | unavailable
+  source: text("source").default("ai"), // "ai" | "explicit"
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Pip AI helper messages shown in chat
+export const pipMessages = pgTable("pip_messages", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -50,6 +110,10 @@ export const groupsRelations = relations(groups, ({ many, one }) => ({
   plan: one(plans, {
     fields: [groups.id],
     references: [plans.groupId],
+  }),
+  tripPlan: one(tripPlans, {
+    fields: [groups.id],
+    references: [tripPlans.groupId],
   }),
 }));
 
@@ -92,9 +156,13 @@ export type Participant = typeof participants.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Plan = typeof plans.$inferSelect;
 export type PlanVote = typeof planVotes.$inferSelect;
+export type TripPlan = typeof tripPlans.$inferSelect;
+export type TripAlternative = typeof tripAlternatives.$inferSelect;
+export type TripAttendance = typeof tripAttendance.$inferSelect;
+export type PipMessage = typeof pipMessages.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
-export type JoinGroupRequest = { name: string }; // Participant name
+export type JoinGroupRequest = { name: string };
 export type CreateMessageRequest = { content: string; participantId: number };
 export type PlanResponse = Plan;
 
@@ -106,3 +174,9 @@ export type GroupWithDetails = Group & {
 export type MessageWithParticipant = Message & {
   participantName: string;
 };
+
+// Chat message union: regular user messages + Pip messages, sorted by time
+export type ChatMessage = (MessageWithParticipant & { isPip: false }) | (PipMessage & { isPip: true; participantName: string });
+
+export type TripStatus = "Early ideas" | "Narrowing options" | "Almost decided" | "Trip locked";
+export type CommitmentLevel = "interested" | "likely" | "committed" | "unavailable";

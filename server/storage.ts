@@ -1,6 +1,12 @@
 import { db } from "./db";
-import { groups, participants, messages, plans, planVotes, type Group, type Participant, type Message, type Plan, type PlanVote } from "@shared/schema";
-import { eq, desc, and } from "drizzle-orm";
+import {
+  groups, participants, messages, plans, planVotes,
+  tripPlans, tripAlternatives, tripAttendance, pipMessages,
+  type Group, type Participant, type Message, type Plan, type PlanVote,
+  type TripPlan, type TripAlternative, type TripAttendance, type PipMessage,
+  type CommitmentLevel,
+} from "@shared/schema";
+import { eq, desc, and, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
 
 export interface IStorage {
@@ -18,19 +24,40 @@ export interface IStorage {
   createMessage(groupId: number, participantId: number, content: string): Promise<Message>;
   getMessagesByGroup(groupId: number): Promise<(Message & { participantName: string })[]>;
 
-  // Plans
+  // Legacy plans (preserved)
   getPlanByGroup(groupId: number): Promise<Plan | undefined>;
   updatePlan(groupId: number, summary: string): Promise<Plan>;
 
-  // Votes
+  // Legacy votes (preserved)
   getVotesByGroup(groupId: number): Promise<PlanVote[]>;
   addVote(groupId: number, participantId: number, alternativeIndex: number): Promise<PlanVote>;
   removeVote(groupId: number, participantId: number): Promise<void>;
+
+  // Trip Plans
+  getTripPlanByGroup(groupId: number): Promise<TripPlan | undefined>;
+  upsertTripPlan(groupId: number, data: Partial<Omit<TripPlan, "id" | "groupId">>): Promise<TripPlan>;
+
+  // Trip Alternatives
+  getTripAlternativesByGroup(groupId: number): Promise<TripAlternative[]>;
+  getTripAlternativeById(id: number): Promise<TripAlternative | undefined>;
+  upsertTripAlternative(groupId: number, data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>): Promise<TripAlternative>;
+  updateAlternativeVoteCount(id: number, voteCount: number): Promise<void>;
+  dismissAlternative(id: number): Promise<void>;
+  clearTripAlternatives(groupId: number): Promise<void>;
+
+  // Trip Attendance
+  getTripAttendanceByGroup(groupId: number): Promise<TripAttendance[]>;
+  upsertTripAttendance(groupId: number, participantId: number, alternativeId: number | null, commitmentLevel: CommitmentLevel, source: "ai" | "explicit"): Promise<TripAttendance>;
+  removeTripAttendance(groupId: number, participantId: number, alternativeId: number | null): Promise<void>;
+
+  // Pip Messages
+  getPipMessagesByGroup(groupId: number): Promise<PipMessage[]>;
+  createPipMessage(groupId: number, content: string): Promise<PipMessage>;
+  getLastPipMessage(groupId: number): Promise<PipMessage | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
   async createGroup(name: string): Promise<Group> {
-    // Generate a simple slug
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + randomBytes(3).toString('hex');
     const [group] = await db.insert(groups).values({ name, shareLinkSlug: slug }).returning();
     return group;
@@ -88,7 +115,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updatePlan(groupId: number, summary: string): Promise<Plan> {
-    // Check if plan exists
     const existing = await this.getPlanByGroup(groupId);
     if (existing) {
       const [updated] = await db
@@ -98,10 +124,7 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return updated;
     } else {
-      const [created] = await db
-        .insert(plans)
-        .values({ groupId, summary })
-        .returning();
+      const [created] = await db.insert(plans).values({ groupId, summary }).returning();
       return created;
     }
   }
@@ -111,7 +134,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async addVote(groupId: number, participantId: number, alternativeIndex: number): Promise<PlanVote> {
-    // Remove existing vote first (one vote per participant)
     await this.removeVote(groupId, participantId);
     const [vote] = await db.insert(planVotes).values({ groupId, participantId, alternativeIndex }).returning();
     return vote;
@@ -121,6 +143,159 @@ export class DatabaseStorage implements IStorage {
     await db.delete(planVotes).where(
       and(eq(planVotes.groupId, groupId), eq(planVotes.participantId, participantId))
     );
+  }
+
+  // === TRIP PLAN METHODS ===
+
+  async getTripPlanByGroup(groupId: number): Promise<TripPlan | undefined> {
+    const [plan] = await db.select().from(tripPlans).where(eq(tripPlans.groupId, groupId));
+    return plan;
+  }
+
+  async upsertTripPlan(groupId: number, data: Partial<Omit<TripPlan, "id" | "groupId">>): Promise<TripPlan> {
+    const existing = await this.getTripPlanByGroup(groupId);
+    if (existing) {
+      const [updated] = await db
+        .update(tripPlans)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(tripPlans.groupId, groupId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db
+        .insert(tripPlans)
+        .values({ groupId, ...data })
+        .returning();
+      return created;
+    }
+  }
+
+  // === TRIP ALTERNATIVE METHODS ===
+
+  async getTripAlternativesByGroup(groupId: number): Promise<TripAlternative[]> {
+    return db
+      .select()
+      .from(tripAlternatives)
+      .where(and(eq(tripAlternatives.groupId, groupId), eq(tripAlternatives.status, "active")))
+      .orderBy(desc(tripAlternatives.supportScore));
+  }
+
+  async getTripAlternativeById(id: number): Promise<TripAlternative | undefined> {
+    const [alt] = await db.select().from(tripAlternatives).where(eq(tripAlternatives.id, id));
+    return alt;
+  }
+
+  async upsertTripAlternative(groupId: number, data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>): Promise<TripAlternative> {
+    const [created] = await db
+      .insert(tripAlternatives)
+      .values({ groupId, ...data, updatedAt: new Date() })
+      .returning();
+    return created;
+  }
+
+  async updateAlternativeVoteCount(id: number, voteCount: number): Promise<void> {
+    await db
+      .update(tripAlternatives)
+      .set({ voteCount, updatedAt: new Date() })
+      .where(eq(tripAlternatives.id, id));
+  }
+
+  async dismissAlternative(id: number): Promise<void> {
+    await db
+      .update(tripAlternatives)
+      .set({ status: "dismissed", updatedAt: new Date() })
+      .where(eq(tripAlternatives.id, id));
+  }
+
+  async clearTripAlternatives(groupId: number): Promise<void> {
+    await db
+      .update(tripAlternatives)
+      .set({ status: "dismissed", updatedAt: new Date() })
+      .where(eq(tripAlternatives.groupId, groupId));
+  }
+
+  // === TRIP ATTENDANCE METHODS ===
+
+  async getTripAttendanceByGroup(groupId: number): Promise<TripAttendance[]> {
+    return db.select().from(tripAttendance).where(eq(tripAttendance.groupId, groupId));
+  }
+
+  async upsertTripAttendance(
+    groupId: number,
+    participantId: number,
+    alternativeId: number | null,
+    commitmentLevel: CommitmentLevel,
+    source: "ai" | "explicit"
+  ): Promise<TripAttendance> {
+    // Delete existing record for this participant+alternative combo
+    if (alternativeId === null) {
+      await db.delete(tripAttendance).where(
+        and(
+          eq(tripAttendance.groupId, groupId),
+          eq(tripAttendance.participantId, participantId),
+          isNull(tripAttendance.alternativeId)
+        )
+      );
+    } else {
+      await db.delete(tripAttendance).where(
+        and(
+          eq(tripAttendance.groupId, groupId),
+          eq(tripAttendance.participantId, participantId),
+          eq(tripAttendance.alternativeId, alternativeId)
+        )
+      );
+    }
+
+    const [record] = await db
+      .insert(tripAttendance)
+      .values({ groupId, participantId, alternativeId, commitmentLevel, source, updatedAt: new Date() })
+      .returning();
+    return record;
+  }
+
+  async removeTripAttendance(groupId: number, participantId: number, alternativeId: number | null): Promise<void> {
+    if (alternativeId === null) {
+      await db.delete(tripAttendance).where(
+        and(
+          eq(tripAttendance.groupId, groupId),
+          eq(tripAttendance.participantId, participantId),
+          isNull(tripAttendance.alternativeId)
+        )
+      );
+    } else {
+      await db.delete(tripAttendance).where(
+        and(
+          eq(tripAttendance.groupId, groupId),
+          eq(tripAttendance.participantId, participantId),
+          eq(tripAttendance.alternativeId, alternativeId)
+        )
+      );
+    }
+  }
+
+  // === PIP MESSAGE METHODS ===
+
+  async getPipMessagesByGroup(groupId: number): Promise<PipMessage[]> {
+    return db
+      .select()
+      .from(pipMessages)
+      .where(eq(pipMessages.groupId, groupId))
+      .orderBy(pipMessages.createdAt);
+  }
+
+  async createPipMessage(groupId: number, content: string): Promise<PipMessage> {
+    const [msg] = await db.insert(pipMessages).values({ groupId, content }).returning();
+    return msg;
+  }
+
+  async getLastPipMessage(groupId: number): Promise<PipMessage | undefined> {
+    const [msg] = await db
+      .select()
+      .from(pipMessages)
+      .where(eq(pipMessages.groupId, groupId))
+      .orderBy(desc(pipMessages.createdAt))
+      .limit(1);
+    return msg;
   }
 }
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertGroupSchema, insertParticipantSchema, insertMessageSchema, groups, participants, messages, plans } from './schema';
+import { insertGroupSchema, insertParticipantSchema, insertMessageSchema, groups, participants, messages, plans, tripPlans, tripAlternatives } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -49,7 +49,16 @@ export const api = {
       method: 'GET' as const,
       path: '/api/groups/:groupId/messages',
       responses: {
-        200: z.array(z.custom<typeof messages.$inferSelect & { participantName: string }>()),
+        // Returns user messages interleaved with Pip messages, sorted by createdAt
+        200: z.array(z.object({
+          id: z.number(),
+          groupId: z.number(),
+          participantId: z.number().nullable(),
+          content: z.string(),
+          createdAt: z.string().nullable(),
+          participantName: z.string(),
+          isPip: z.boolean(),
+        })),
       },
     },
     create: {
@@ -79,7 +88,52 @@ export const api = {
         404: errorSchemas.notFound,
       },
     }
-  }
+  },
+  tripPlan: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/groups/:groupId/trip',
+      responses: {
+        200: z.custom<typeof tripPlans.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+  },
+  tripAlternatives: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/groups/:groupId/trip/alternatives',
+      responses: {
+        200: z.array(z.custom<typeof tripAlternatives.$inferSelect>()),
+      },
+    },
+    vote: {
+      method: 'POST' as const,
+      path: '/api/groups/:groupId/trip/alternatives/:alternativeId/vote',
+      input: z.object({ participantId: z.number() }),
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        400: errorSchemas.validation,
+        404: errorSchemas.notFound,
+      },
+    },
+  },
+  tripAttendance: {
+    update: {
+      method: 'POST' as const,
+      path: '/api/groups/:groupId/trip/attendance',
+      input: z.object({
+        participantId: z.number(),
+        alternativeId: z.number().nullable(),
+        commitmentLevel: z.enum(['interested', 'likely', 'committed', 'unavailable']),
+      }),
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        400: errorSchemas.validation,
+        403: errorSchemas.validation,
+      },
+    },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {

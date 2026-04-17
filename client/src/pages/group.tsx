@@ -176,6 +176,12 @@ function TripCard({ trip }: { trip: TripPlan | null }) {
           </div>
         </div>
       )}
+
+      {trip.updatedAt && (
+        <div className="text-[10px] text-muted-foreground/60 text-right" data-testid="text-last-updated">
+          Last updated {format(new Date(trip.updatedAt), "MMM d, h:mm a")}
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -194,8 +200,10 @@ function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
   if (trip.lodgingPreference) chips.push({ label: trip.lodgingPreference, color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300", icon: <BedDouble className="w-3 h-3" /> });
 
   const questions = trip.unresolvedQuestions ?? [];
+  const committed = trip.committedAttendeeNames ?? [];
+  const likely = trip.likelyAttendeeNames ?? [];
 
-  if (chips.length === 0 && questions.length === 0) return null;
+  if (chips.length === 0 && questions.length === 0 && committed.length === 0 && likely.length === 0) return null;
 
   return (
     <div className="space-y-2">
@@ -209,6 +217,21 @@ function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
             >
               {chip.icon}
               {chip.label}
+            </span>
+          ))}
+        </div>
+      )}
+      {/* Attendance signal chips */}
+      {(committed.length > 0 || likely.length > 0) && (
+        <div className="flex flex-wrap gap-1.5">
+          {committed.map((name, i) => (
+            <span key={`c-${i}`} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid={`chip-attendance-committed-${i}`}>
+              <UserCheck className="w-3 h-3" /> {name} ✓
+            </span>
+          ))}
+          {likely.map((name, i) => (
+            <span key={`l-${i}`} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300" data-testid={`chip-attendance-likely-${i}`}>
+              <Heart className="w-3 h-3" /> {name}
             </span>
           ))}
         </div>
@@ -422,6 +445,7 @@ function TravelWorkspace({
   alternatives,
   isOpen,
   onClose,
+  tabMode,
 }: {
   groupId: number;
   groupName: string;
@@ -431,6 +455,7 @@ function TravelWorkspace({
   alternatives: TripAlternative[];
   isOpen: boolean;
   onClose: () => void;
+  tabMode?: boolean;
 }) {
   const { toast } = useToast();
   const voteMutation = useVoteAlternative(groupId);
@@ -456,8 +481,19 @@ function TravelWorkspace({
     if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
     const committed = t?.committedAttendeeNames ?? [];
     const likely = t?.likelyAttendeeNames ?? [];
+    // Compute "still deciding": participants not in committed or likely lists
+    // We don't have the full participants list here, so note the statuses
     if (committed.length) text += `\n✅ Committed: ${committed.join(", ")}`;
-    if (likely.length) text += `\n👍 Likely: ${likely.join(", ")}`;
+    if (likely.length) text += `\n👍 Likely going: ${likely.join(", ")}`;
+    if (!committed.length && !likely.length) text += `\n❓ Still deciding`;
+    else if (alternatives.filter(a => a.status === "active").length > 1) {
+      text += `\n❓ Still deciding on final option`;
+    }
+    if (t?.status && t.status !== "Trip locked") {
+      text += `\n⚡ Status: ${t.status}`;
+    } else if (t?.status === "Trip locked") {
+      text += `\n🔒 Trip locked!`;
+    }
     text += `\n\n🔗 Join the planning: ${window.location.origin}/g/${slug}`;
     navigator.clipboard.writeText(text);
     toast({ title: "Trip Summary Copied!", description: "Paste it in your group chat." });
@@ -482,9 +518,15 @@ function TravelWorkspace({
 
       <motion.aside
         className={cn(
-          "fixed top-0 right-0 h-full w-full sm:w-[420px] bg-card border-l z-50 shadow-2xl flex flex-col",
-          "lg:relative lg:translate-x-0 lg:static lg:shadow-none lg:w-96 xl:w-[420px]",
-          !isOpen && "translate-x-full lg:translate-x-0"
+          // Tab mode on mobile: inline, fills parent container — no slide-over
+          tabMode
+            ? "flex flex-col h-full w-full bg-card border-l"
+            : cn(
+                "fixed top-0 right-0 h-full w-full sm:w-[420px] bg-card border-l z-50 shadow-2xl flex flex-col",
+                !isOpen && "translate-x-full"
+              ),
+          // Desktop: always static
+          "lg:relative lg:static lg:shadow-none lg:w-96 xl:w-[420px] lg:translate-x-0"
         )}
       >
         {/* Sidebar header */}
@@ -499,7 +541,7 @@ function TravelWorkspace({
           </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 lg:pb-4">
           {/* Action buttons */}
           <div className="flex gap-2">
             <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={copyLink} data-testid="button-copy-link">
@@ -802,10 +844,13 @@ export default function GroupPage() {
         </div>
       </div>
 
-      {/* ── RIGHT: Travel Workspace (desktop permanent, mobile slide-over) ── */}
+      {/* ── RIGHT: Travel Workspace ──
+           Desktop: static side panel
+           Mobile tab mode: full-width inline (not a slide-over)
+           Mobile overlay mode: slide-over (from sparkles button) ── */}
       <div className={cn(
-        "lg:block",
-        mobileTab === "plan" ? "block w-full" : "hidden"
+        "lg:block lg:h-full lg:overflow-hidden",
+        mobileTab === "plan" ? "block h-full flex-1" : "hidden"
       )}>
         <TravelWorkspace
           groupId={group.id}
@@ -816,6 +861,7 @@ export default function GroupPage() {
           alternatives={alternatives}
           isOpen={isWorkspaceOpen}
           onClose={() => setIsWorkspaceOpen(false)}
+          tabMode={mobileTab === "plan"}
         />
       </div>
 

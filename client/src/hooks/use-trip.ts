@@ -1,12 +1,14 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { api, buildUrl } from "@shared/routes";
 import type { TripPlan, TripAlternative, CommitmentLevel } from "@shared/schema";
 
 export function useTripPlan(groupId: number) {
   return useQuery<TripPlan | null>({
-    queryKey: ["/api/groups", groupId, "trip"],
+    queryKey: [api.tripPlan.get.path, groupId],
     queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/trip`);
+      const url = buildUrl(api.tripPlan.get.path, { groupId });
+      const res = await fetch(url);
       if (res.status === 404) return null;
       if (!res.ok) throw new Error("Failed to fetch trip plan");
       return res.json();
@@ -18,9 +20,10 @@ export function useTripPlan(groupId: number) {
 
 export function useTripAlternatives(groupId: number) {
   return useQuery<TripAlternative[]>({
-    queryKey: ["/api/groups", groupId, "trip", "alternatives"],
+    queryKey: [api.tripAlternatives.list.path, groupId],
     queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/trip/alternatives`);
+      const url = buildUrl(api.tripAlternatives.list.path, { groupId });
+      const res = await fetch(url);
       if (!res.ok) return [];
       return res.json();
     },
@@ -39,18 +42,15 @@ export function useVoteAlternative(groupId: number) {
       alternativeId: number;
       participantId: number;
     }) => {
-      return apiRequest(
-        "POST",
-        `/api/groups/${groupId}/trip/alternatives/${alternativeId}/vote`,
-        { participantId }
-      );
+      const url = buildUrl(api.tripAlternatives.vote.path, { groupId, alternativeId });
+      return apiRequest("POST", url, { participantId });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["/api/groups", groupId, "trip", "alternatives"],
+        queryKey: [api.tripAlternatives.list.path, groupId],
       });
       queryClient.invalidateQueries({
-        queryKey: ["/api/groups", groupId, "trip"],
+        queryKey: [api.tripPlan.get.path, groupId],
       });
     },
   });
@@ -67,7 +67,8 @@ export function useUpdateAttendance(groupId: number) {
       alternativeId: number | null;
       commitmentLevel: CommitmentLevel;
     }) => {
-      return apiRequest("POST", `/api/groups/${groupId}/trip/attendance`, {
+      const url = buildUrl(api.tripAttendance.update.path, { groupId });
+      return apiRequest("POST", url, {
         participantId,
         alternativeId,
         commitmentLevel,
@@ -75,10 +76,10 @@ export function useUpdateAttendance(groupId: number) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["/api/groups", groupId, "trip", "alternatives"],
+        queryKey: [api.tripAlternatives.list.path, groupId],
       });
       queryClient.invalidateQueries({
-        queryKey: ["/api/groups", groupId, "trip"],
+        queryKey: [api.tripPlan.get.path, groupId],
       });
     },
   });

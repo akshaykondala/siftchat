@@ -48,6 +48,7 @@ export interface IStorage {
   getSupportSignalsByGroup(groupId: number): Promise<SupportSignal[]>;
   getSupportSignalsByAlternative(groupId: number, alternativeId: number): Promise<SupportSignal[]>;
   upsertSupportSignal(groupId: number, participantId: number, alternativeId: number | null, commitmentLevel: CommitmentLevel, source: "ai" | "explicit"): Promise<SupportSignal>;
+  removeAiSupportSignalsByAlternative(groupId: number, alternativeId: number): Promise<void>;
   removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void>;
 
   // Pip Messages
@@ -258,6 +259,16 @@ export class DatabaseStorage implements IStorage {
   async getSupportSignalsByAlternative(groupId: number, alternativeId: number): Promise<SupportSignal[]> {
     return db.select().from(supportSignals).where(
       and(eq(supportSignals.groupId, groupId), eq(supportSignals.alternativeId, alternativeId))
+    );
+  }
+
+  async removeAiSupportSignalsByAlternative(groupId: number, alternativeId: number): Promise<void> {
+    await db.delete(supportSignals).where(
+      and(
+        eq(supportSignals.groupId, groupId),
+        eq(supportSignals.alternativeId, alternativeId),
+        eq(supportSignals.source, "ai")
+      )
     );
   }
 

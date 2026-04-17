@@ -476,10 +476,16 @@ RULES:
     }
   }
 
-  // Store AI per-alternative supporter signals in support_signals table
-  // This ensures score recomputation incorporates both AI and explicit signals uniformly
+  // Refresh AI per-alternative supporter signals in support_signals table:
+  // 1. Clear old AI signals for this alternative (prevents stale inflation)
+  // 2. Write current AI detections as support_signals rows
+  // 3. recomputeAlternativeScore then merges AI + explicit signals (explicit beats AI per-participant)
   for (const processedAlt of processedAlts) {
     const aiAlt = alternatives.find(a => alternativesMatch(processedAlt, a));
+
+    // Clear stale AI signals for this alternative before writing fresh ones
+    await storage.removeAiSupportSignalsByAlternative(groupId, processedAlt.id);
+
     if (!aiAlt) continue;
 
     const supporterNames = aiAlt.supporterNames ?? [];
@@ -550,9 +556,12 @@ RULES:
       : msgs.filter(m => m.createdAt && m.createdAt > new Date(lastPipTime)).length;
     const groupStuck = msgsSinceLastPip >= 8 && !materialChange;
 
-    // Trust shouldPipSpeak from AI (covers clarifying questions, ambiguity reduction, etc.)
-    // Require anti-spam cooldown (3 min). Allow if material change OR group stuck OR AI says speak.
-    const shouldPost = shouldPipSpeak && minutesSinceLastPip >= 3 && (materialChange || groupStuck || shouldPipSpeak);
+    // A low-confidence group that hasn't gotten clarity yet benefits from a clarifying question
+    const hasLowConfidenceWithChat = (newPlan?.confidenceScore ?? 0) < 30 && msgs.length >= 4;
+
+    // Post when AI recommends AND cooldown met AND one backend condition is true
+    const shouldPost = shouldPipSpeak && minutesSinceLastPip >= 3
+      && (materialChange || groupStuck || hasLowConfidenceWithChat);
 
     if (shouldPost) {
       await storage.createPipMessage(groupId, pipMessage);
@@ -603,7 +612,7 @@ async function recomputeAlternativeScore(groupId: number, alternativeId: number)
 async function recalculateWinner(groupId: number): Promise<void> {
   const alts = await storage.getTripAlternativesByGroup(groupId);
   if (alts.length === 0) {
-    await storage.upsertTripPlan(groupId, { winningAlternativeId: undefined });
+    await storage.upsertTripPlan(groupId, { winningAlternativeId: null });
     return;
   }
 
@@ -611,8 +620,8 @@ async function recalculateWinner(groupId: number): Promise<void> {
     (a.supportScore ?? 0) > (best.supportScore ?? 0) ? a : best
   );
 
-  // Only designate a winner if score exceeds minimum threshold (> 4)
-  const winnerId = (top.supportScore ?? 0) > 4 ? top.id : undefined;
+  // Only designate a winner if score exceeds minimum threshold (> 4); explicitly null otherwise
+  const winnerId = (top.supportScore ?? 0) > 4 ? top.id : null;
   await storage.upsertTripPlan(groupId, { winningAlternativeId: winnerId });
 }
 

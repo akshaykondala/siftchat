@@ -35,14 +35,15 @@ export function useTripAlternatives(groupId: number) {
 
 export function usePipMessages(groupId: number) {
   return useQuery<PipMessage[]>({
-    queryKey: ["/api/groups/:groupId/pip-messages", groupId],
+    queryKey: [api.pipMessages.list.path, groupId],
     queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/pip-messages`);
+      const url = buildUrl(api.pipMessages.list.path, { groupId });
+      const res = await fetch(url);
       if (!res.ok) return [];
       return res.json();
     },
     enabled: !!groupId,
-    refetchInterval: 5000,
+    refetchInterval: 3000,
     initialData: [],
   });
 }

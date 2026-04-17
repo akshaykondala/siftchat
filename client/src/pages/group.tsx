@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance } from "@/hooks/use-trip";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, usePipMessages } from "@/hooks/use-trip";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -257,22 +257,18 @@ function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
 // ─── Attendance Buttons ─────────────────────────────────────────────────────────
 function AttendanceButtons({
   alternativeId,
-  participantId,
-  groupId,
   onUpdate,
   isPending,
 }: {
   alternativeId: number | null;
-  participantId: number;
-  groupId: number;
   onUpdate: (level: CommitmentLevel) => void;
   isPending: boolean;
 }) {
-  const buttons: { level: CommitmentLevel; label: string; color: string; activeColor: string }[] = [
-    { level: "interested", label: "Maybe", color: "bg-zinc-100 text-zinc-600 hover:bg-zinc-200", activeColor: "bg-zinc-200 text-zinc-800 ring-2 ring-zinc-400" },
-    { level: "likely", label: "Likely", color: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100", activeColor: "bg-indigo-100 text-indigo-800 ring-2 ring-indigo-400" },
-    { level: "committed", label: "I'm in!", color: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100", activeColor: "bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400" },
-    { level: "unavailable", label: "Can't go", color: "bg-red-50 text-red-600 hover:bg-red-100", activeColor: "bg-red-100 text-red-800 ring-2 ring-red-400" },
+  const buttons: { level: CommitmentLevel; label: string; color: string }[] = [
+    { level: "interested", label: "Interested", color: "bg-zinc-100 text-zinc-600 hover:bg-zinc-200" },
+    { level: "likely", label: "Likely", color: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100" },
+    { level: "committed", label: "I'm in", color: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" },
+    { level: "unavailable", label: "Can't make it", color: "bg-red-50 text-red-600 hover:bg-red-100" },
   ];
 
   return (
@@ -425,8 +421,6 @@ function AlternativeCard({
         <div className="text-[10px] font-semibold text-muted-foreground mb-1">Your stance:</div>
         <AttendanceButtons
           alternativeId={alt.id}
-          participantId={participantId}
-          groupId={groupId}
           onUpdate={(level) => attendanceMutation.mutate({ participantId, alternativeId: alt.id, commitmentLevel: level })}
           isPending={attendanceMutation.isPending}
         />
@@ -580,15 +574,48 @@ function UserMessage({ content, name, isMe, time }: { content: string; name: str
   );
 }
 
+function SystemMessage({ content, time }: { content: string; time: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 2 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex justify-center my-1"
+      data-testid="message-system"
+    >
+      <span className="px-3 py-1 rounded-full bg-muted text-muted-foreground text-[11px] border border-border/50">
+        {content}
+        <span className="ml-1.5 opacity-50">{time}</span>
+      </span>
+    </motion.div>
+  );
+}
+
 // ─── Group Page (Main) ────────────────────────────────────────────────────────
 export default function GroupPage() {
   const [match, params] = useRoute("/g/:slug");
   const slug = match ? params.slug : "";
 
   const { data: group, isLoading: groupLoading, error: groupError } = useGroup(slug);
-  const { data: messages } = useMessages(group?.id ?? 0);
+  const { data: userMessages } = useMessages(group?.id ?? 0);
+  const { data: pipMessagesList = [] } = usePipMessages(group?.id ?? 0);
   const { data: trip } = useTripPlan(group?.id ?? 0);
   const { data: alternatives = [] } = useTripAlternatives(group?.id ?? 0);
+
+  // Merge user messages (non-Pip only) with Pip messages sorted by time
+  const messages = React.useMemo(() => {
+    const users = (userMessages ?? []).filter((m) => !m.isPip);
+    const pips = pipMessagesList.map((p) => ({
+      id: p.id,
+      content: p.content,
+      createdAt: p.createdAt,
+      participantId: null as number | null,
+      participantName: "Pip",
+      isPip: true as const,
+    }));
+    return [...users, ...pips].sort(
+      (a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
+    );
+  }, [userMessages, pipMessagesList]);
 
   const joinGroup = useJoinGroup();
   const sendMessage = useSendMessage();
@@ -780,6 +807,9 @@ export default function GroupPage() {
               const time = format(new Date(msg.createdAt ?? new Date()), "h:mm a");
               if (msg.isPip) {
                 return <PipMessage key={`pip-${msg.id}`} content={msg.content} time={time} />;
+              }
+              if (!msg.participantId && !msg.isPip) {
+                return <SystemMessage key={`sys-${msg.id}`} content={msg.content} time={time} />;
               }
               return (
                 <UserMessage

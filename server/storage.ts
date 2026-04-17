@@ -46,6 +46,7 @@ export interface IStorage {
 
   // Support Signals (AI-detected and explicit)
   getSupportSignalsByGroup(groupId: number): Promise<SupportSignal[]>;
+  getSupportSignalsByAlternative(alternativeId: number): Promise<SupportSignal[]>;
   upsertSupportSignal(groupId: number, participantId: number, alternativeId: number | null, commitmentLevel: CommitmentLevel, source: "ai" | "explicit"): Promise<SupportSignal>;
   removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void>;
 
@@ -227,13 +228,14 @@ export class DatabaseStorage implements IStorage {
     commitmentLevel: CommitmentLevel,
     source: "ai" | "explicit"
   ): Promise<SupportSignal> {
-    // Delete existing record for this participant+alternative combo
+    // Only delete records of the SAME source — AI signals must not overwrite explicit user input
     if (alternativeId === null) {
       await db.delete(supportSignals).where(
         and(
           eq(supportSignals.groupId, groupId),
           eq(supportSignals.participantId, participantId),
-          isNull(supportSignals.alternativeId)
+          isNull(supportSignals.alternativeId),
+          eq(supportSignals.source, source)
         )
       );
     } else {
@@ -241,7 +243,8 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(supportSignals.groupId, groupId),
           eq(supportSignals.participantId, participantId),
-          eq(supportSignals.alternativeId, alternativeId)
+          eq(supportSignals.alternativeId, alternativeId),
+          eq(supportSignals.source, source)
         )
       );
     }
@@ -250,6 +253,10 @@ export class DatabaseStorage implements IStorage {
       .values({ groupId, participantId, alternativeId, commitmentLevel, source, updatedAt: new Date() })
       .returning();
     return record;
+  }
+
+  async getSupportSignalsByAlternative(alternativeId: number): Promise<SupportSignal[]> {
+    return db.select().from(supportSignals).where(eq(supportSignals.alternativeId, alternativeId));
   }
 
   async removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void> {

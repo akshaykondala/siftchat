@@ -221,22 +221,8 @@ export async function registerRoutes(
       // Record explicit commitment signal
       await storage.upsertSupportSignal(groupId, participantId, alternativeId, "committed", "explicit");
 
-      // Recount explicit votes for this alternative from support signals
-      const allSignals = await storage.getSupportSignalsByGroup(groupId);
-      const altExplicitVotes = allSignals.filter(
-        s => s.alternativeId === alternativeId && s.source === "explicit"
-      );
-      const newVoteCount = altExplicitVotes.length;
-
-      // Recompute supportScore and persist it
-      const committedCount = alt.committedAttendeeNames?.length ?? 0;
-      const likelyCount = alt.likelyAttendeeNames?.length ?? 0;
-      const newSupportScore = computeSupportScore(newVoteCount, committedCount, likelyCount);
-
-      await storage.updateTripAlternative(alternativeId, {
-        voteCount: newVoteCount,
-        supportScore: newSupportScore,
-      });
+      // Recount only committed explicit signals — not interested/likely/unavailable
+      await recomputeAlternativeScore(groupId, alternativeId);
 
       // Recalculate winner
       await recalculateWinner(groupId);
@@ -271,6 +257,12 @@ export async function registerRoutes(
         "explicit"
       );
 
+      // If this signal is for a specific alternative, recompute its score and update winner
+      if (alternativeId !== null) {
+        await recomputeAlternativeScore(groupId, alternativeId);
+        await recalculateWinner(groupId);
+      }
+
       res.json({ success: true });
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -296,6 +288,13 @@ export async function registerRoutes(
 // ============================================================
 
 async function analyzeTripChat(groupId: number): Promise<void> {
+  // Capture state BEFORE AI analysis for material-change comparison
+  const [previousPlan, previousAlts, previousPipMsgs] = await Promise.all([
+    storage.getTripPlanByGroup(groupId),
+    storage.getTripAlternativesByGroup(groupId),
+    storage.getPipMessagesByGroup(groupId),
+  ]);
+
   const msgs = await storage.getMessagesByGroup(groupId);
   if (msgs.length === 0) return;
 
@@ -495,14 +494,31 @@ RULES:
     }
   }
 
-  // Pip message — only if shouldPipSpeak and not posted too recently
-  if (shouldPipSpeak && pipMessage) {
+  // Pip posting: backend material-change evaluation (do not rely solely on AI flag)
+  if (pipMessage) {
+    const newPlan = await storage.getTripPlanByGroup(groupId);
+    const newAlts = await storage.getTripAlternativesByGroup(groupId);
     const lastPip = await storage.getLastPipMessage(groupId);
     const now = Date.now();
     const lastPipTime = lastPip?.createdAt ? new Date(lastPip.createdAt).getTime() : 0;
     const minutesSinceLastPip = (now - lastPipTime) / (1000 * 60);
 
-    if (minutesSinceLastPip >= 3) {
+    // Compute backend material-change signals
+    const destinationChanged = (newPlan?.destination ?? null) !== (previousPlan?.destination ?? null);
+    const winnerChanged = (newPlan?.winningAlternativeId ?? null) !== (previousPlan?.winningAlternativeId ?? null);
+    const newAltAppeared = newAlts.length > previousAlts.length;
+    const confidenceJump = Math.abs((newPlan?.confidenceScore ?? 0) - (previousPlan?.confidenceScore ?? 0)) >= 15;
+
+    // Group stuck: many messages since last Pip with no material change
+    const msgsSinceLastPip = previousPipMsgs.length === 0
+      ? msgs.length
+      : msgs.filter(m => m.createdAt && m.createdAt > new Date(lastPipTime)).length;
+    const groupStuck = msgsSinceLastPip >= 8 && !destinationChanged && !winnerChanged;
+
+    const materialChange = destinationChanged || winnerChanged || newAltAppeared || confidenceJump;
+    const shouldPost = (materialChange || groupStuck) && shouldPipSpeak && minutesSinceLastPip >= 3;
+
+    if (shouldPost) {
       await storage.createPipMessage(groupId, pipMessage);
     }
   }
@@ -511,6 +527,38 @@ RULES:
 // ============================================================
 //  HELPERS
 // ============================================================
+
+async function recomputeAlternativeScore(groupId: number, alternativeId: number): Promise<void> {
+  const altSignals = await storage.getSupportSignalsByAlternative(alternativeId);
+
+  // Deduplicate per participant: explicit beats AI for the same participant
+  const bestByParticipant = new Map<number, { commitmentLevel: string; source: string }>();
+  for (const signal of altSignals) {
+    const existing = bestByParticipant.get(signal.participantId);
+    if (!existing || signal.source === "explicit") {
+      bestByParticipant.set(signal.participantId, {
+        commitmentLevel: signal.commitmentLevel,
+        source: signal.source,
+      });
+    }
+  }
+
+  const deduped = Array.from(bestByParticipant.values());
+  const committedCount = deduped.filter(s => s.commitmentLevel === "committed").length;
+  const likelyCount = deduped.filter(s => s.commitmentLevel === "likely").length;
+
+  // Vote count = only committed explicit signals (a true voluntary vote)
+  const explicitVoteCount = altSignals.filter(
+    s => s.source === "explicit" && s.commitmentLevel === "committed"
+  ).length;
+
+  const newSupportScore = computeSupportScore(explicitVoteCount, committedCount, likelyCount);
+
+  await storage.updateTripAlternative(alternativeId, {
+    voteCount: explicitVoteCount,
+    supportScore: newSupportScore,
+  });
+}
 
 async function recalculateWinner(groupId: number): Promise<void> {
   const alts = await storage.getTripAlternativesByGroup(groupId);

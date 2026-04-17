@@ -13,7 +13,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { format } from "date-fns";
 import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
-  DollarSign, Zap, BedDouble, TrendingUp, CheckCircle2, HelpCircle,
+  DollarSign, BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
   Heart, AlertCircle, UserCheck,
 } from "lucide-react";
@@ -112,7 +112,6 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
   const effectiveDates = winnerAlt?.dateRange
     || (trip.startDate && trip.endDate ? `${trip.startDate} → ${trip.endDate}` : trip.startDate || trip.endDate || null);
   const effectiveBudget = winnerAlt?.budgetBand || trip.budgetBand;
-  const effectiveVibe = winnerAlt?.vibe || trip.vibe;
 
   const likelyNames = (winnerAlt?.likelyAttendeeNames ?? trip.likelyAttendeeNames) ?? [];
   const committedNames = (winnerAlt?.committedAttendeeNames ?? trip.committedAttendeeNames) ?? [];
@@ -136,8 +135,28 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
         <TripField icon={<MapPin className="w-4 h-4" />} label="Destination" value={effectiveDest} placeholder="Undecided" />
         <TripField icon={<Calendar className="w-4 h-4" />} label="Dates" value={effectiveDates} placeholder="Dates TBD" />
         <TripField icon={<DollarSign className="w-4 h-4" />} label="Budget" value={effectiveBudget} placeholder="Budget TBD" />
-        <TripField icon={<Zap className="w-4 h-4" />} label="Vibe" value={effectiveVibe} placeholder="Vibe TBD" />
         <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
+        <div className="flex items-center gap-3">
+          <span className="text-muted-foreground/60 shrink-0"><Plane className="w-4 h-4" /></span>
+          <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground/60 w-20 shrink-0">Flights</span>
+          {trip.flightsBooked ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid="badge-flights-booked">
+              <CheckCircle2 className="w-3 h-3" /> Flights booked ✓
+            </span>
+          ) : trip.flightSearchUrl ? (
+            <a
+              href={trip.flightSearchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium"
+              data-testid="link-search-flights"
+            >
+              Search flights →
+            </a>
+          ) : (
+            <span className="text-xs text-muted-foreground/40 italic">Not yet booked</span>
+          )}
+        </div>
       </div>
 
       <div className="pt-2 border-t border-primary/10 space-y-2">
@@ -212,7 +231,7 @@ function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
   if (trip.startDate) chips.push({ label: trip.startDate, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
   if (trip.endDate && trip.endDate !== trip.startDate) chips.push({ label: `→ ${trip.endDate}`, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
   if (trip.budgetBand) chips.push({ label: trip.budgetBand, color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <DollarSign className="w-3 h-3" /> });
-  if (trip.vibe) chips.push({ label: trip.vibe, color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300", icon: <Zap className="w-3 h-3" /> });
+  if (trip.flightsBooked) chips.push({ label: "Flights booked ✓", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <Plane className="w-3 h-3" /> });
   if (trip.lodgingPreference) chips.push({ label: trip.lodgingPreference, color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300", icon: <BedDouble className="w-3 h-3" /> });
 
   const questions = trip.unresolvedQuestions ?? [];
@@ -379,11 +398,6 @@ function AlternativeCard({
         {alt.budgetBand && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
             <DollarSign className="w-3 h-3" /> {alt.budgetBand}
-          </span>
-        )}
-        {alt.vibe && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-            <Zap className="w-3 h-3" /> {alt.vibe}
           </span>
         )}
         {((alt.voteCount ?? 0) > 0 || (alt.supportScore ?? 0) > 0) && (
@@ -650,14 +664,13 @@ export default function GroupPage() {
     const effectiveDates = winnerAlt?.dateRange
       || ([t?.startDate, t?.endDate].filter(Boolean).join(" → ") || null);
     const effectiveBudget = winnerAlt?.budgetBand || t?.budgetBand;
-    const effectiveVibe = winnerAlt?.vibe || t?.vibe;
 
     let text = `✈️ ${groupName}\n`;
     if (effectiveDest) text += `📍 ${effectiveDest}\n`;
     if (effectiveDates) text += `📅 ${effectiveDates}\n`;
     if (effectiveBudget) text += `💰 ${effectiveBudget}\n`;
-    if (effectiveVibe) text += `✨ Vibe: ${effectiveVibe}\n`;
     if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
+    if (t?.flightsBooked) text += `✈️ Flights booked!\n`;
 
     // Compute attendee lists with named still-deciding derived from full participant list
     const committed = (winnerAlt?.committedAttendeeNames ?? t?.committedAttendeeNames ?? []);

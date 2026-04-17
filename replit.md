@@ -2,7 +2,7 @@
 
 ## Overview
 
-Sift Chat is an AI-powered group travel planning application. Users create trip groups with shareable links, join via their name (no account required), chat in real-time, and an AI (Pip) automatically extracts a structured trip plan from the conversation. The core use case is helping groups go from vague travel interest to a locked trip decision — covering destination, dates, budget, vibe, lodging, and who's actually coming.
+Sift Chat is an AI-powered group travel planning application. Users create trip groups with shareable links, join via their name (no account required), chat in real-time, and an AI (Pip) automatically extracts a structured trip plan from the conversation. The core use case is helping groups go from vague travel interest to a locked trip decision — covering destination, dates, budget, flights, lodging, and who's actually coming.
 
 ## User Preferences
 
@@ -28,7 +28,7 @@ The main `/g/:slug` page has a two-panel layout:
 ### Key Frontend Components (client/src/pages/group.tsx)
 - `ConfidencePill` — colored badge for trip status
 - `TripCard` — displays all structured trip fields with graceful placeholders
-- `PlanningSignalsStrip` — colored chips for detected destinations, dates, budget, vibe, lodging, and unresolved questions
+- `PlanningSignalsStrip` — colored chips for detected destinations, dates, budget, flights booked status, lodging, and unresolved questions
 - `AlternativeCard` — bundled alternative with vote button, attendance quick-action buttons, expandable evidence summary
 - `AttendanceButtons` — four stance buttons: Maybe / Likely / I'm in! / Can't go
 - `TravelWorkspace` — right sidebar container with copy link, share trip summary, trip card, signals, alternatives
@@ -58,7 +58,7 @@ The application has nine entities (five legacy + four new travel planning tables
 5. **PlanVotes** - Legacy votes (superseded by TripAttendance)
 
 **New Travel Planning Tables:**
-6. **TripPlans** - Structured trip state: destination, dates, budget, vibe, lodging, confidence score, status, attendee lists, unresolved questions, winning alternative ID
+6. **TripPlans** - Structured trip state: destination, dates, budget, lodging, flightsBooked (boolean), flightSearchUrl, confidence score, status, attendee lists, unresolved questions, winning alternative ID
 7. **TripAlternatives** - Bundled trip options with support scores, vote counts, AI summary, evidence summary, attendee lists
 8. **TripAttendance** - Per-participant commitment level (interested/likely/committed/unavailable) per alternative, from AI detection or explicit button press
 9. **PipMessages** - Messages posted by the Pip AI helper bot, stored separately and interleaved in the chat feed
@@ -79,15 +79,18 @@ Located in `server/routes.ts`. Called on every new message (fire-and-forget).
 
 1. Reads last 60 messages for the group
 2. Calls OpenAI gpt-4o with JSON mode to extract:
-   - Main plan: destination, startDate, endDate, budgetBand, vibe, lodgingPreference, attendee lists, unresolved questions, confidenceScore
-   - Trip alternatives: each with destination, dateRange, budget, vibe, aiSummary, evidenceSummary, supporter names
+   - Main plan: destination, startDate, endDate, budgetBand, lodgingPreference, flightsBooked, flightSearchUrl, attendee lists, unresolved questions, confidenceScore
+   - Trip alternatives: each with destination, dateRange, budget, aiSummary, evidenceSummary, supporter names
+   - flightPipMessage: a one-time Pip message with flight recommendations (price range, direct/connecting, flight time, Google Flights + Kayak links)
    - Attendance signals: per-participant commitment levels toward main plan or specific alternatives
    - Pip message decision: shouldPipSpeak (bool) + pipMessage (1-2 sentences)
 3. Upserts trip plan with derived status (Early ideas → Narrowing options → Almost decided → Trip locked)
 4. Matches AI alternatives to existing alternatives by destination/dateRange to preserve vote counts; creates new ones or dismisses stale ones
-5. Computes supportScore = voteCount×3 + committed×2 + likely×1; sets winningAlternativeId if top score > 4
-6. Stores AI-detected attendance signals as TripAttendance with source="ai"
-7. Posts Pip message only if shouldPipSpeak=true AND last Pip message was >3 minutes ago (anti-spam)
+5. Applies +15 confidenceScore bonus when flightsBooked=true (real commitment signal)
+6. Computes supportScore = voteCount×3 + committed×2 + likely×1; sets winningAlternativeId if top score > 4
+7. Posts flightPipMessage once per destination (gated by checking for existing ✈️ messages for that destination)
+8. Stores AI-detected attendance signals as TripAttendance with source="ai"
+9. Posts Pip message only if shouldPipSpeak=true AND last Pip message was >3 minutes ago (anti-spam)
 
 ### Trip Confidence / Status System
 - **Early ideas**: < 3 messages or no destination detected

@@ -53,8 +53,9 @@ export const tripPlans = pgTable("trip_plans", {
   startDate: text("start_date"),
   endDate: text("end_date"),
   budgetBand: text("budget_band"),
-  vibe: text("vibe"),
   lodgingPreference: text("lodging_preference"),
+  flightsBooked: boolean("flights_booked").default(false),
+  flightSearchUrl: text("flight_search_url"),
   confidenceScore: integer("confidence_score").default(0),
   status: text("status").default("Early ideas"),
   likelyAttendeeNames: text("likely_attendee_names").array(),
@@ -70,7 +71,6 @@ export const tripAlternatives = pgTable("trip_alternatives", {
   destination: text("destination"),
   dateRange: text("date_range"),
   budgetBand: text("budget_band"),
-  vibe: text("vibe"),
   lodgingPreference: text("lodging_preference"),
   aiSummary: text("ai_summary"),
   supportScore: real("support_score").default(0),
@@ -188,13 +188,15 @@ export interface AiTripExtraction {
     startDate: string | null;
     endDate: string | null;
     budgetBand: string | null;
-    vibe: string | null;
     lodgingPreference: string | null;
+    flightsBooked: boolean;
+    flightSearchUrl: string | null;
     likelyAttendeeNames: string[];
     committedAttendeeNames: string[];
     unresolvedQuestions: string[];
   };
   confidenceScore: number;
+  flightPipMessage: string | null;
   alternatives: AiAlternative[];
   attendanceSignals: AiAttendanceSignal[];
   shouldPipSpeak: boolean;
@@ -205,7 +207,6 @@ export interface AiAlternative {
   destination: string | null;
   dateRange: string | null;
   budgetBand: string | null;
-  vibe: string | null;
   lodgingPreference: string | null;
   aiSummary: string | null;
   evidenceSummary: string | null;

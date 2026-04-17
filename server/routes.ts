@@ -329,19 +329,20 @@ Return ONLY a valid JSON object with this exact structure:
     "startDate": "start date string like 'May 24' or null",
     "endDate": "end date string like 'May 27' or null",
     "budgetBand": "one of: Budget-friendly / Moderate / Splurge / null",
-    "vibe": "short vibe description like 'beach + nightlife' or null",
     "lodgingPreference": "Airbnb / Hotel / Hostel / Camping / null",
+    "flightsBooked": false,
+    "flightSearchUrl": null,
     "likelyAttendeeNames": ["names of people likely attending main plan"],
     "committedAttendeeNames": ["names of people committed to main plan"],
     "unresolvedQuestions": ["short descriptions of unresolved questions, 1 per item"]
   },
   "confidenceScore": 0,
+  "flightPipMessage": null,
   "alternatives": [
     {
       "destination": "city or region",
       "dateRange": "e.g. May 24-27 or early June",
       "budgetBand": "Budget-friendly / Moderate / Splurge / null",
-      "vibe": "short description",
       "lodgingPreference": "Airbnb / Hotel / null",
       "aiSummary": "one short punchy label e.g. 'Budget beach weekend'",
       "evidenceSummary": "1-2 sentences explaining what chat evidence created this option",
@@ -367,7 +368,10 @@ RULES:
 4. shouldPipSpeak = true ONLY when: a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck, or one clarifying question would unblock everything. NOT after every message.
 5. pipMessage: warm, concise, max 2 sentences. null if shouldPipSpeak is false.
 6. unresolvedQuestions: list only genuinely open questions (budget disagreements, unconfirmed dates, missing attendee commitment, etc.).
-7. If fewer than 3 messages or no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.`;
+7. If fewer than 3 messages or no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.
+8. FLIGHTS — flightsBooked: set true if chat contains explicit confirmation that flights are booked (e.g. "I booked my flights", "got my ticket", "flights are sorted", "just booked"). Otherwise false.
+9. FLIGHTS — flightSearchUrl: when destination is known, generate a Google Flights search URL like https://www.google.com/travel/flights?q=flights+to+DESTINATION+DATES (URL-encode spaces as +). Include dates if both startDate and endDate are known. null if no destination.
+10. FLIGHTS — flightPipMessage: when destination AND both dates are known for the first time (or just became clear), write a helpful 2-3 sentence flight recommendation message as Pip. Include: typical roundtrip price range based on your knowledge, whether flights are typically direct or connecting, estimated flight time, and two search links formatted as markdown: [Search Google Flights](URL) and [Check Kayak](KAYAK_URL). For Kayak URL use format: https://www.kayak.com/flights/anywhere/CITY/STARTDATE_ISO/ENDDATE_ISO where CITY is the destination city name (no airport code needed) and dates are YYYY-MM-DD if known or omit date parts if not. Set flightPipMessage to null if destination or dates are missing, or if no new flight info emerged.`;
 
   let extracted: AiTripExtraction;
   try {
@@ -388,11 +392,16 @@ RULES:
     return;
   }
 
-  const { mainPlan, confidenceScore, alternatives, attendanceSignals, shouldPipSpeak, pipMessage } = extracted;
+  const { mainPlan, confidenceScore, flightPipMessage, alternatives, attendanceSignals, shouldPipSpeak, pipMessage } = extracted;
+
+  // Boost confidence when flights are booked — real commitment signal
+  const boostedConfidenceScore = mainPlan.flightsBooked
+    ? Math.min(100, confidenceScore + 15)
+    : confidenceScore;
 
   // Compute status using enriched signals
   const status = computeTripStatus({
-    confidenceScore,
+    confidenceScore: boostedConfidenceScore,
     messageCount: msgs.length,
     destination: mainPlan.destination,
     committedNames: mainPlan.committedAttendeeNames,
@@ -408,9 +417,10 @@ RULES:
     startDate: mainPlan.startDate,
     endDate: mainPlan.endDate,
     budgetBand: mainPlan.budgetBand,
-    vibe: mainPlan.vibe,
     lodgingPreference: mainPlan.lodgingPreference,
-    confidenceScore: Math.max(0, Math.min(100, confidenceScore)),
+    flightsBooked: mainPlan.flightsBooked,
+    flightSearchUrl: mainPlan.flightSearchUrl,
+    confidenceScore: Math.max(0, Math.min(100, boostedConfidenceScore)),
     status,
     likelyAttendeeNames: mainPlan.likelyAttendeeNames,
     committedAttendeeNames: mainPlan.committedAttendeeNames,
@@ -441,7 +451,6 @@ RULES:
         destination: aiAlt.destination,
         dateRange: aiAlt.dateRange,
         budgetBand: aiAlt.budgetBand,
-        vibe: aiAlt.vibe,
         lodgingPreference: aiAlt.lodgingPreference,
         aiSummary: aiAlt.aiSummary,
         evidenceSummary: aiAlt.evidenceSummary,
@@ -458,7 +467,6 @@ RULES:
         destination: aiAlt.destination,
         dateRange: aiAlt.dateRange,
         budgetBand: aiAlt.budgetBand,
-        vibe: aiAlt.vibe,
         lodgingPreference: aiAlt.lodgingPreference,
         aiSummary: aiAlt.aiSummary,
         evidenceSummary: aiAlt.evidenceSummary,
@@ -568,6 +576,18 @@ RULES:
 
     if (shouldPost) {
       await storage.createPipMessage(groupId, pipMessage);
+    }
+  }
+
+  // Flight Pip message: post ONCE per destination — never repeat for the same destination
+  if (flightPipMessage && mainPlan.destination) {
+    const allPipMsgs = await storage.getPipMessagesByGroup(groupId);
+    const destLower = mainPlan.destination.toLowerCase();
+    const alreadyPostedFlight = allPipMsgs.some(
+      m => m.content.toLowerCase().includes("✈️") && m.content.toLowerCase().includes(destLower)
+    );
+    if (!alreadyPostedFlight) {
+      await storage.createPipMessage(groupId, flightPipMessage);
     }
   }
 }
@@ -713,18 +733,19 @@ function normalizeAiExtraction(raw: Record<string, unknown>): AiTripExtraction {
       startDate: (mainPlan.startDate as string) ?? null,
       endDate: (mainPlan.endDate as string) ?? null,
       budgetBand: (mainPlan.budgetBand as string) ?? null,
-      vibe: (mainPlan.vibe as string) ?? null,
       lodgingPreference: (mainPlan.lodgingPreference as string) ?? null,
+      flightsBooked: mainPlan.flightsBooked === true,
+      flightSearchUrl: (mainPlan.flightSearchUrl as string) ?? null,
       likelyAttendeeNames: Array.isArray(mainPlan.likelyAttendeeNames) ? mainPlan.likelyAttendeeNames as string[] : [],
       committedAttendeeNames: Array.isArray(mainPlan.committedAttendeeNames) ? mainPlan.committedAttendeeNames as string[] : [],
       unresolvedQuestions: Array.isArray(mainPlan.unresolvedQuestions) ? mainPlan.unresolvedQuestions as string[] : [],
     },
     confidenceScore: typeof raw.confidenceScore === "number" ? raw.confidenceScore : 5,
+    flightPipMessage: (raw.flightPipMessage as string) ?? null,
     alternatives: Array.isArray(raw.alternatives) ? (raw.alternatives as Record<string, unknown>[]).map(a => ({
       destination: (a.destination as string) ?? null,
       dateRange: (a.dateRange as string) ?? null,
       budgetBand: (a.budgetBand as string) ?? null,
-      vibe: (a.vibe as string) ?? null,
       lodgingPreference: (a.lodgingPreference as string) ?? null,
       aiSummary: (a.aiSummary as string) ?? null,
       evidenceSummary: (a.evidenceSummary as string) ?? null,

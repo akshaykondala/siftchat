@@ -579,15 +579,24 @@ RULES:
     }
   }
 
-  // Flight Pip message: post ONCE per destination — never repeat for the same destination
-  if (flightPipMessage && mainPlan.destination) {
-    const allPipMsgs = await storage.getPipMessagesByGroup(groupId);
-    const destLower = mainPlan.destination.toLowerCase();
-    const alreadyPostedFlight = allPipMsgs.some(
-      m => m.content.toLowerCase().includes("✈️") && m.content.toLowerCase().includes(destLower)
-    );
-    if (!alreadyPostedFlight) {
-      await storage.createPipMessage(groupId, flightPipMessage);
+  // Flight Pip message: post once per unique destination+startDate+endDate pair,
+  // respecting the same anti-spam cooldown as regular Pip messages (≥ 3 min).
+  if (flightPipMessage && mainPlan.destination && mainPlan.startDate && mainPlan.endDate) {
+    const currentFlightKey = `${mainPlan.destination}|${mainPlan.startDate}|${mainPlan.endDate}`;
+    const latestPlan = await storage.getTripPlanByGroup(groupId);
+    const alreadyPostedForThisPair = latestPlan?.lastFlightRecoKey === currentFlightKey;
+
+    if (!alreadyPostedForThisPair) {
+      // Use the same cooldown signal as regular Pip messages
+      const lastPipForFlight = await storage.getLastPipMessage(groupId);
+      const nowMs = Date.now();
+      const lastPipTime = lastPipForFlight?.createdAt ? new Date(lastPipForFlight.createdAt).getTime() : 0;
+      const minutesSinceLastPip = (nowMs - lastPipTime) / (1000 * 60);
+
+      if (minutesSinceLastPip >= 3) {
+        await storage.createPipMessage(groupId, flightPipMessage);
+        await storage.upsertTripPlan(groupId, { lastFlightRecoKey: currentFlightKey });
+      }
     }
   }
 }

@@ -95,7 +95,7 @@ function TripField({ icon, label, value, placeholder }: { icon: React.ReactNode;
 }
 
 // ─── Trip Card ─────────────────────────────────────────────────────────────────
-function TripCard({ trip }: { trip: TripPlan | null }) {
+function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: TripAlternative | null }) {
   if (!trip) {
     return (
       <div className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5">
@@ -107,23 +107,36 @@ function TripCard({ trip }: { trip: TripPlan | null }) {
     );
   }
 
-  const dateRange = trip.startDate && trip.endDate
-    ? `${trip.startDate} → ${trip.endDate}`
-    : trip.startDate || trip.endDate || null;
+  // When a winner alternative exists, promote its fields over the base trip plan
+  const effectiveDest = winnerAlt?.destination || trip.destination;
+  const effectiveDates = winnerAlt?.dateRange
+    || (trip.startDate && trip.endDate ? `${trip.startDate} → ${trip.endDate}` : trip.startDate || trip.endDate || null);
+  const effectiveBudget = winnerAlt?.budget || trip.budgetBand;
+  const effectiveVibe = winnerAlt?.vibe || trip.vibe;
 
-  const likelyNames = trip.likelyAttendeeNames ?? [];
-  const committedNames = trip.committedAttendeeNames ?? [];
+  const likelyNames = (winnerAlt?.likelyAttendeeNames ?? trip.likelyAttendeeNames) ?? [];
+  const committedNames = (winnerAlt?.committedAttendeeNames ?? trip.committedAttendeeNames) ?? [];
 
   return (
     <motion.div
       layout
-      className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5 space-y-4"
+      className={cn(
+        "rounded-2xl border p-5 space-y-4",
+        winnerAlt
+          ? "border-emerald-300 dark:border-emerald-700 bg-gradient-to-br from-emerald-50/60 to-teal-50/60 dark:from-emerald-950/20 dark:to-teal-950/20"
+          : "border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20"
+      )}
     >
+      {winnerAlt && (
+        <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 text-[11px] font-bold uppercase tracking-widest">
+          <Star className="w-3.5 h-3.5" /> Winning Option — {winnerAlt.aiSummary || winnerAlt.destination}
+        </div>
+      )}
       <div className="space-y-3">
-        <TripField icon={<MapPin className="w-4 h-4" />} label="Destination" value={trip.destination} placeholder="Undecided" />
-        <TripField icon={<Calendar className="w-4 h-4" />} label="Dates" value={dateRange} placeholder="Dates TBD" />
-        <TripField icon={<DollarSign className="w-4 h-4" />} label="Budget" value={trip.budgetBand} placeholder="Budget TBD" />
-        <TripField icon={<Zap className="w-4 h-4" />} label="Vibe" value={trip.vibe} placeholder="Vibe TBD" />
+        <TripField icon={<MapPin className="w-4 h-4" />} label="Destination" value={effectiveDest} placeholder="Undecided" />
+        <TripField icon={<Calendar className="w-4 h-4" />} label="Dates" value={effectiveDates} placeholder="Dates TBD" />
+        <TripField icon={<DollarSign className="w-4 h-4" />} label="Budget" value={effectiveBudget} placeholder="Budget TBD" />
+        <TripField icon={<Zap className="w-4 h-4" />} label="Vibe" value={effectiveVibe} placeholder="Vibe TBD" />
         <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
       </div>
 
@@ -486,7 +499,10 @@ function TravelWorkspace({
           {/* Trip Card */}
           <div>
             <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Current Plan</div>
-            <TripCard trip={trip ?? null} />
+            <TripCard
+              trip={trip ?? null}
+              winnerAlt={winnerAltId ? alternatives.find((a) => a.id === winnerAltId) ?? null : null}
+            />
           </div>
 
           {/* Planning Signals */}
@@ -634,27 +650,41 @@ export default function GroupPage() {
 
   const shareTripSummary = () => {
     const t = trip;
-    const name = group?.name ?? "";
-    let text = `✈️ ${name}\n`;
-    if (t?.destination) text += `📍 ${t.destination}\n`;
-    if (t?.startDate || t?.endDate) {
-      const dates = [t.startDate, t.endDate].filter(Boolean).join(" → ");
-      text += `📅 ${dates}\n`;
-    }
-    if (t?.budgetBand) text += `💰 ${t.budgetBand}\n`;
-    if (t?.vibe) text += `✨ Vibe: ${t.vibe}\n`;
+    const groupName = group?.name ?? "";
+    const allParticipants = group?.participants ?? [];
+
+    // Derive effective plan from winner alternative when one is locked in
+    const winnerAlt = t?.winningAlternativeId
+      ? alternatives.find((a) => a.id === t.winningAlternativeId) ?? null
+      : null;
+    const effectiveDest = winnerAlt?.destination || t?.destination;
+    const effectiveDates = winnerAlt?.dateRange
+      || ([t?.startDate, t?.endDate].filter(Boolean).join(" → ") || null);
+    const effectiveBudget = winnerAlt?.budget || t?.budgetBand;
+    const effectiveVibe = winnerAlt?.vibe || t?.vibe;
+
+    let text = `✈️ ${groupName}\n`;
+    if (effectiveDest) text += `📍 ${effectiveDest}\n`;
+    if (effectiveDates) text += `📅 ${effectiveDates}\n`;
+    if (effectiveBudget) text += `💰 ${effectiveBudget}\n`;
+    if (effectiveVibe) text += `✨ Vibe: ${effectiveVibe}\n`;
     if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
-    const committed = t?.committedAttendeeNames ?? [];
-    const likely = t?.likelyAttendeeNames ?? [];
+
+    // Compute attendee lists with named still-deciding derived from full participant list
+    const committed = (winnerAlt?.committedAttendeeNames ?? t?.committedAttendeeNames ?? []);
+    const likely = (winnerAlt?.likelyAttendeeNames ?? t?.likelyAttendeeNames ?? []);
+    const knownNames = new Set([...committed, ...likely].map((n) => n.toLowerCase()));
+    const stillDeciding = allParticipants
+      .filter((p) => !knownNames.has(p.name.toLowerCase()))
+      .map((p) => p.name);
+
     if (committed.length) text += `\n✅ Committed: ${committed.join(", ")}`;
     if (likely.length) text += `\n👍 Likely going: ${likely.join(", ")}`;
-    if (!committed.length && !likely.length) text += `\n❓ Still deciding`;
-    else if (alternatives.filter(a => a.status === "active").length > 1) {
-      text += `\n❓ Still deciding on final option`;
-    }
-    if (t?.status === "Trip locked") text += `\n🔒 Trip locked!`;
-    else if (t?.status) text += `\n⚡ Status: ${t.status ?? "Early ideas"}`;
-    text += `\n\n🔗 Join the planning: ${window.location.origin}/g/${slug}`;
+    if (stillDeciding.length) text += `\n❓ Still deciding: ${stillDeciding.join(", ")}`;
+
+    if (t?.status === "Trip locked") text += `\n\n🔒 Trip locked!`;
+    else if (t?.status) text += `\n\n⚡ Status: ${t.status}`;
+    text += `\n🔗 Join the planning: ${window.location.origin}/g/${slug}`;
     navigator.clipboard.writeText(text);
     toast({ title: "Trip Summary Copied!", description: "Paste it in your group chat." });
   };

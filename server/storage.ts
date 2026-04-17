@@ -1,9 +1,9 @@
 import { db } from "./db";
 import {
   groups, participants, messages, plans, planVotes,
-  tripPlans, tripAlternatives, tripAttendance, pipMessages,
+  tripPlans, tripAlternatives, supportSignals, pipMessages,
   type Group, type Participant, type Message, type Plan, type PlanVote,
-  type TripPlan, type TripAlternative, type TripAttendance, type PipMessage,
+  type TripPlan, type TripAlternative, type SupportSignal, type PipMessage,
   type CommitmentLevel,
 } from "@shared/schema";
 import { eq, desc, and, isNull } from "drizzle-orm";
@@ -40,15 +40,14 @@ export interface IStorage {
   // Trip Alternatives
   getTripAlternativesByGroup(groupId: number): Promise<TripAlternative[]>;
   getTripAlternativeById(id: number): Promise<TripAlternative | undefined>;
-  upsertTripAlternative(groupId: number, data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>): Promise<TripAlternative>;
-  updateAlternativeVoteCount(id: number, voteCount: number): Promise<void>;
+  insertTripAlternative(groupId: number, data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>): Promise<TripAlternative>;
+  updateTripAlternative(id: number, data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>): Promise<TripAlternative>;
   dismissAlternative(id: number): Promise<void>;
-  clearTripAlternatives(groupId: number): Promise<void>;
 
-  // Trip Attendance
-  getTripAttendanceByGroup(groupId: number): Promise<TripAttendance[]>;
-  upsertTripAttendance(groupId: number, participantId: number, alternativeId: number | null, commitmentLevel: CommitmentLevel, source: "ai" | "explicit"): Promise<TripAttendance>;
-  removeTripAttendance(groupId: number, participantId: number, alternativeId: number | null): Promise<void>;
+  // Support Signals (AI-detected and explicit)
+  getSupportSignalsByGroup(groupId: number): Promise<SupportSignal[]>;
+  upsertSupportSignal(groupId: number, participantId: number, alternativeId: number | null, commitmentLevel: CommitmentLevel, source: "ai" | "explicit"): Promise<SupportSignal>;
+  removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void>;
 
   // Pip Messages
   getPipMessagesByGroup(groupId: number): Promise<PipMessage[]>;
@@ -185,7 +184,10 @@ export class DatabaseStorage implements IStorage {
     return alt;
   }
 
-  async upsertTripAlternative(groupId: number, data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>): Promise<TripAlternative> {
+  async insertTripAlternative(
+    groupId: number,
+    data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>
+  ): Promise<TripAlternative> {
     const [created] = await db
       .insert(tripAlternatives)
       .values({ groupId, ...data, updatedAt: new Date() })
@@ -193,11 +195,16 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateAlternativeVoteCount(id: number, voteCount: number): Promise<void> {
-    await db
+  async updateTripAlternative(
+    id: number,
+    data: Partial<Omit<TripAlternative, "id" | "groupId" | "createdAt">>
+  ): Promise<TripAlternative> {
+    const [updated] = await db
       .update(tripAlternatives)
-      .set({ voteCount, updatedAt: new Date() })
-      .where(eq(tripAlternatives.id, id));
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(tripAlternatives.id, id))
+      .returning();
+    return updated;
   }
 
   async dismissAlternative(id: number): Promise<void> {
@@ -207,67 +214,59 @@ export class DatabaseStorage implements IStorage {
       .where(eq(tripAlternatives.id, id));
   }
 
-  async clearTripAlternatives(groupId: number): Promise<void> {
-    await db
-      .update(tripAlternatives)
-      .set({ status: "dismissed", updatedAt: new Date() })
-      .where(eq(tripAlternatives.groupId, groupId));
+  // === SUPPORT SIGNAL METHODS ===
+
+  async getSupportSignalsByGroup(groupId: number): Promise<SupportSignal[]> {
+    return db.select().from(supportSignals).where(eq(supportSignals.groupId, groupId));
   }
 
-  // === TRIP ATTENDANCE METHODS ===
-
-  async getTripAttendanceByGroup(groupId: number): Promise<TripAttendance[]> {
-    return db.select().from(tripAttendance).where(eq(tripAttendance.groupId, groupId));
-  }
-
-  async upsertTripAttendance(
+  async upsertSupportSignal(
     groupId: number,
     participantId: number,
     alternativeId: number | null,
     commitmentLevel: CommitmentLevel,
     source: "ai" | "explicit"
-  ): Promise<TripAttendance> {
+  ): Promise<SupportSignal> {
     // Delete existing record for this participant+alternative combo
     if (alternativeId === null) {
-      await db.delete(tripAttendance).where(
+      await db.delete(supportSignals).where(
         and(
-          eq(tripAttendance.groupId, groupId),
-          eq(tripAttendance.participantId, participantId),
-          isNull(tripAttendance.alternativeId)
+          eq(supportSignals.groupId, groupId),
+          eq(supportSignals.participantId, participantId),
+          isNull(supportSignals.alternativeId)
         )
       );
     } else {
-      await db.delete(tripAttendance).where(
+      await db.delete(supportSignals).where(
         and(
-          eq(tripAttendance.groupId, groupId),
-          eq(tripAttendance.participantId, participantId),
-          eq(tripAttendance.alternativeId, alternativeId)
+          eq(supportSignals.groupId, groupId),
+          eq(supportSignals.participantId, participantId),
+          eq(supportSignals.alternativeId, alternativeId)
         )
       );
     }
-
     const [record] = await db
-      .insert(tripAttendance)
+      .insert(supportSignals)
       .values({ groupId, participantId, alternativeId, commitmentLevel, source, updatedAt: new Date() })
       .returning();
     return record;
   }
 
-  async removeTripAttendance(groupId: number, participantId: number, alternativeId: number | null): Promise<void> {
+  async removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void> {
     if (alternativeId === null) {
-      await db.delete(tripAttendance).where(
+      await db.delete(supportSignals).where(
         and(
-          eq(tripAttendance.groupId, groupId),
-          eq(tripAttendance.participantId, participantId),
-          isNull(tripAttendance.alternativeId)
+          eq(supportSignals.groupId, groupId),
+          eq(supportSignals.participantId, participantId),
+          isNull(supportSignals.alternativeId)
         )
       );
     } else {
-      await db.delete(tripAttendance).where(
+      await db.delete(supportSignals).where(
         and(
-          eq(tripAttendance.groupId, groupId),
-          eq(tripAttendance.participantId, participantId),
-          eq(tripAttendance.alternativeId, alternativeId)
+          eq(supportSignals.groupId, groupId),
+          eq(supportSignals.participantId, participantId),
+          eq(supportSignals.alternativeId, alternativeId)
         )
       );
     }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertGroupSchema, insertParticipantSchema, insertMessageSchema, groups, participants, messages, plans, tripPlans, tripAlternatives } from './schema';
+import { insertGroupSchema, insertParticipantSchema, insertMessageSchema, groups, participants, messages, plans, tripPlans, tripAlternatives, pipMessages } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -13,6 +13,16 @@ export const errorSchemas = {
     message: z.string(),
   }),
 };
+
+const chatMessageSchema = z.object({
+  id: z.number(),
+  groupId: z.number(),
+  participantId: z.number().nullable(),
+  content: z.string(),
+  createdAt: z.string().nullable(),
+  participantName: z.string(),
+  isPip: z.boolean(),
+});
 
 export const api = {
   groups: {
@@ -50,15 +60,7 @@ export const api = {
       path: '/api/groups/:groupId/messages',
       responses: {
         // Returns user messages interleaved with Pip messages, sorted by createdAt
-        200: z.array(z.object({
-          id: z.number(),
-          groupId: z.number(),
-          participantId: z.number().nullable(),
-          content: z.string(),
-          createdAt: z.string().nullable(),
-          participantName: z.string(),
-          isPip: z.boolean(),
-        })),
+        200: z.array(chatMessageSchema),
       },
     },
     create: {
@@ -87,7 +89,7 @@ export const api = {
         200: z.custom<typeof plans.$inferSelect>(),
         404: errorSchemas.notFound,
       },
-    }
+    },
   },
   tripPlan: {
     get: {
@@ -114,6 +116,7 @@ export const api = {
       responses: {
         200: z.object({ success: z.boolean() }),
         400: errorSchemas.validation,
+        403: errorSchemas.validation,
         404: errorSchemas.notFound,
       },
     },
@@ -131,6 +134,15 @@ export const api = {
         200: z.object({ success: z.boolean() }),
         400: errorSchemas.validation,
         403: errorSchemas.validation,
+      },
+    },
+  },
+  pipMessages: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/groups/:groupId/pip-messages',
+      responses: {
+        200: z.array(z.custom<typeof pipMessages.$inferSelect>()),
       },
     },
   },

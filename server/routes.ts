@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { openai } from "./replit_integrations/audio/client";
-import type { TripAlternative, CommitmentLevel } from "@shared/schema";
+import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -56,12 +56,11 @@ export async function registerRoutes(
 
   app.get(api.messages.list.path, async (req, res) => {
     const groupId = Number(req.params.groupId);
-    const [userMsgs, pipMsgs] = await Promise.all([
+    const [userMsgs, pipMsgsList] = await Promise.all([
       storage.getMessagesByGroup(groupId),
       storage.getPipMessagesByGroup(groupId),
     ]);
 
-    // Normalize user messages
     const normalizedUser = userMsgs.map(m => ({
       id: m.id,
       groupId: m.groupId,
@@ -72,9 +71,9 @@ export async function registerRoutes(
       isPip: false as const,
     }));
 
-    // Normalize Pip messages (use a unique negative-space id to avoid collision)
-    const normalizedPip = pipMsgs.map(p => ({
-      id: p.id * -1,  // negative to avoid collision with user message IDs
+    // Use negative IDs to avoid collision with user message IDs in frontend
+    const normalizedPip = pipMsgsList.map(p => ({
+      id: p.id * -1,
       groupId: p.groupId,
       participantId: null,
       content: p.content,
@@ -83,7 +82,6 @@ export async function registerRoutes(
       isPip: true as const,
     }));
 
-    // Merge and sort by createdAt
     const combined = [...normalizedUser, ...normalizedPip].sort((a, b) => {
       const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
@@ -130,8 +128,7 @@ export async function registerRoutes(
   app.post(api.plans.generate.path, async (req, res) => {
     const groupId = Number(req.params.groupId);
     try {
-      const result = await analyzeTripChat(groupId);
-      // Return legacy plan for compat
+      await analyzeTripChat(groupId);
       const plan = await storage.getPlanByGroup(groupId);
       res.json(plan || { groupId, summary: "{}", lastUpdatedAt: new Date() });
     } catch (err) {
@@ -151,7 +148,7 @@ export async function registerRoutes(
   app.post("/api/groups/:groupId/votes", async (req, res) => {
     const groupId = Number(req.params.groupId);
     try {
-      const { participantId, alternativeIndex } = req.body;
+      const { participantId, alternativeIndex } = req.body as { participantId: unknown; alternativeIndex: unknown };
       if (typeof participantId !== "number" || typeof alternativeIndex !== "number") {
         return res.status(400).json({ message: "participantId and alternativeIndex required" });
       }
@@ -169,7 +166,7 @@ export async function registerRoutes(
   app.delete("/api/groups/:groupId/votes", async (req, res) => {
     const groupId = Number(req.params.groupId);
     try {
-      const { participantId } = req.body;
+      const { participantId } = req.body as { participantId: unknown };
       if (typeof participantId !== "number") {
         return res.status(400).json({ message: "participantId required" });
       }
@@ -221,36 +218,28 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Alternative not found" });
       }
 
-      // Record explicit commitment
-      await storage.upsertTripAttendance(groupId, participantId, alternativeId, "committed", "explicit");
+      // Record explicit commitment signal
+      await storage.upsertSupportSignal(groupId, participantId, alternativeId, "committed", "explicit");
 
-      // Recompute vote count for this alternative from explicit "committed" attendance
-      const allAttendance = await storage.getTripAttendanceByGroup(groupId);
-      const altAttendance = allAttendance.filter(
-        a => a.alternativeId === alternativeId && a.source === "explicit"
+      // Recount explicit votes for this alternative from support signals
+      const allSignals = await storage.getSupportSignalsByGroup(groupId);
+      const altExplicitVotes = allSignals.filter(
+        s => s.alternativeId === alternativeId && s.source === "explicit"
       );
-      const newVoteCount = altAttendance.length;
+      const newVoteCount = altExplicitVotes.length;
 
-      await storage.updateAlternativeVoteCount(alternativeId, newVoteCount);
+      // Recompute supportScore and persist it
+      const committedCount = alt.committedAttendeeNames?.length ?? 0;
+      const likelyCount = alt.likelyAttendeeNames?.length ?? 0;
+      const newSupportScore = computeSupportScore(newVoteCount, committedCount, likelyCount);
 
-      // Recompute supportScore for this alternative
-      const committedCount = (alt.committedAttendeeNames?.length ?? 0);
-      const likelyCount = (alt.likelyAttendeeNames?.length ?? 0);
-      const newSupportScore = newVoteCount * 3 + committedCount * 2 + likelyCount * 1;
+      await storage.updateTripAlternative(alternativeId, {
+        voteCount: newVoteCount,
+        supportScore: newSupportScore,
+      });
 
-      // Check if this alternative should become the winning one
-      const tripPlan = await storage.getTripPlanByGroup(groupId);
-      if (tripPlan) {
-        const allAlts = await storage.getTripAlternativesByGroup(groupId);
-        const topAlt = allAlts.reduce((best, a) => {
-          const score = (a.id === alternativeId ? newSupportScore : (a.supportScore ?? 0));
-          return score > (best?.supportScore ?? 0) ? { ...a, supportScore: score } : best;
-        }, null as TripAlternative | null);
-
-        if (topAlt && topAlt.supportScore && topAlt.supportScore > 4) {
-          await storage.upsertTripPlan(groupId, { winningAlternativeId: topAlt.id });
-        }
-      }
+      // Recalculate winner
+      await recalculateWinner(groupId);
 
       res.json({ success: true });
     } catch (err) {
@@ -261,7 +250,7 @@ export async function registerRoutes(
     }
   });
 
-  // === TRIP ATTENDANCE (explicit button presses) ===
+  // === TRIP ATTENDANCE / SUPPORT SIGNALS (explicit button presses) ===
 
   app.post(api.tripAttendance.update.path, async (req, res) => {
     const groupId = Number(req.params.groupId);
@@ -274,7 +263,7 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Invalid participant for this group" });
       }
 
-      await storage.upsertTripAttendance(
+      await storage.upsertSupportSignal(
         groupId,
         participantId,
         alternativeId,
@@ -291,6 +280,14 @@ export async function registerRoutes(
     }
   });
 
+  // === PIP MESSAGES (dedicated endpoint) ===
+
+  app.get(api.pipMessages.list.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const msgs = await storage.getPipMessagesByGroup(groupId);
+    res.json(msgs);
+  });
+
   return httpServer;
 }
 
@@ -299,18 +296,17 @@ export async function registerRoutes(
 // ============================================================
 
 async function analyzeTripChat(groupId: number): Promise<void> {
-  const messages = await storage.getMessagesByGroup(groupId);
-  if (messages.length === 0) return;
+  const msgs = await storage.getMessagesByGroup(groupId);
+  if (msgs.length === 0) return;
 
   const participantsList = await storage.getParticipantsByGroup(groupId);
   const participantNames = participantsList.map(p => p.name);
 
-  const chatLog = messages
-    .slice(-60) // last 60 messages for context
+  const chatLog = msgs
+    .slice(-60)
     .map(m => `${m.participantName}: ${m.content}`)
     .join("\n");
 
-  // Build extraction prompt
   const systemPrompt = `You are Pip, an AI travel planning assistant embedded in a group chat.
 Your job is to read the chat and extract structured trip planning data.
 
@@ -327,9 +323,9 @@ Return ONLY a valid JSON object with this exact structure:
     "lodgingPreference": "Airbnb / Hotel / Hostel / Camping / null",
     "likelyAttendeeNames": ["names of people likely attending main plan"],
     "committedAttendeeNames": ["names of people committed to main plan"],
-    "unresolvedQuestions": ["short descriptions of unresolved questions"]
+    "unresolvedQuestions": ["short descriptions of unresolved questions, 1 per item"]
   },
-  "confidenceScore": 0-100,
+  "confidenceScore": 0,
   "alternatives": [
     {
       "destination": "city or region",
@@ -339,7 +335,7 @@ Return ONLY a valid JSON object with this exact structure:
       "lodgingPreference": "Airbnb / Hotel / null",
       "aiSummary": "one short punchy label e.g. 'Budget beach weekend'",
       "evidenceSummary": "1-2 sentences explaining what chat evidence created this option",
-      "supporterNames": ["names of people who supported this alternative"],
+      "supporterNames": ["names who supported this alternative"],
       "committedNames": ["names who seem committed to this specific alternative"]
     }
   ],
@@ -347,23 +343,23 @@ Return ONLY a valid JSON object with this exact structure:
     {
       "participantName": "name matching the group member list",
       "commitmentLevel": "interested / likely / committed / unavailable",
-      "targetOption": "main or the destination/dateRange of the alternative they're interested in"
+      "targetOption": "main or the destination of the alternative"
     }
   ],
-  "shouldPipSpeak": true or false,
-  "pipMessage": "A helpful 1-2 sentence message from Pip to post in chat, or null if shouldPipSpeak is false"
+  "shouldPipSpeak": false,
+  "pipMessage": null
 }
 
 RULES:
-1. confidenceScore: 0 = no idea, 100 = fully locked trip. Base it on: strength of destination consensus, date agreement, attendance clarity, unresolved conflicts.
-2. Only create alternatives for options that have real chat evidence (specific destination or dates mentioned). Do NOT hallucinate.
-3. An alternative must differ from the main plan in at least destination or date.
-4. For attendanceSignals: "committed" = "book me in", "I'm in", "definitely"; "likely" = "planning to", "should be able to"; "interested" = "down for", "sounds fun", "maybe"; "unavailable" = "can't make it", "working that day", "won't be there".
-5. Pip should speak when: a new strong option emerged, the main plan shifted, the group seems stuck, or a single clarifying question would help. Pip should NOT speak after every message or when nothing changed.
-6. Pip's message should be warm, concise, and action-oriented. Max 2 sentences.
-7. If fewer than 3 messages exist or there's no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.`;
+1. confidenceScore 0-100: base on destination consensus strength, date agreement, attendance clarity, conflict count.
+2. Only create alternatives that have real chat evidence. Do NOT hallucinate. Each alternative must differ from main plan in destination or dates.
+3. attendanceSignals — use exact member names from the list provided. "committed" = "book me in", "I'm in", "definitely"; "likely" = "planning to", "should be able to"; "interested" = "down for", "sounds fun", "maybe"; "unavailable" = "can't make it", "working that day", "won't be there".
+4. shouldPipSpeak = true ONLY when: a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck, or one clarifying question would unblock everything. NOT after every message.
+5. pipMessage: warm, concise, max 2 sentences. null if shouldPipSpeak is false.
+6. unresolvedQuestions: list only genuinely open questions (budget disagreements, unconfirmed dates, missing attendee commitment, etc.).
+7. If fewer than 3 messages or no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.`;
 
-  let extracted: any;
+  let extracted: AiTripExtraction;
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -375,89 +371,90 @@ RULES:
       temperature: 0.2,
     });
 
-    extracted = JSON.parse(response.choices[0].message.content || "{}");
+    const raw = JSON.parse(response.choices[0].message.content || "{}");
+    extracted = normalizeAiExtraction(raw);
   } catch (err) {
     console.error("AI extraction failed:", err);
     return;
   }
 
-  const { mainPlan, confidenceScore = 0, alternatives = [], attendanceSignals = [], shouldPipSpeak, pipMessage } = extracted;
+  const { mainPlan, confidenceScore, alternatives, attendanceSignals, shouldPipSpeak, pipMessage } = extracted;
 
-  // Compute status from confidence score and data
-  const status = computeTripStatus(
+  // Compute status using enriched signals
+  const status = computeTripStatus({
     confidenceScore,
-    messages.length,
-    mainPlan?.destination,
-    mainPlan?.committedAttendeeNames ?? []
-  );
-
-  // Upsert the main trip plan
-  await storage.upsertTripPlan(groupId, {
-    destination: mainPlan?.destination ?? null,
-    startDate: mainPlan?.startDate ?? null,
-    endDate: mainPlan?.endDate ?? null,
-    budgetBand: mainPlan?.budgetBand ?? null,
-    vibe: mainPlan?.vibe ?? null,
-    lodgingPreference: mainPlan?.lodgingPreference ?? null,
-    confidenceScore: Math.max(0, Math.min(100, confidenceScore)),
-    status,
-    likelyAttendeeNames: mainPlan?.likelyAttendeeNames ?? [],
-    committedAttendeeNames: mainPlan?.committedAttendeeNames ?? [],
-    unresolvedQuestions: mainPlan?.unresolvedQuestions ?? [],
+    messageCount: msgs.length,
+    destination: mainPlan.destination,
+    committedNames: mainPlan.committedAttendeeNames,
+    unresolvedCount: mainPlan.unresolvedQuestions.length,
+    alternativeCount: alternatives.length,
+    likelyNames: mainPlan.likelyAttendeeNames,
+    totalParticipants: participantNames.length,
   });
 
-  // Process alternatives — match existing ones to preserve vote counts
-  const existingAlts = await storage.getTripAlternativesByGroup(groupId);
+  // Upsert main trip plan
+  await storage.upsertTripPlan(groupId, {
+    destination: mainPlan.destination,
+    startDate: mainPlan.startDate,
+    endDate: mainPlan.endDate,
+    budgetBand: mainPlan.budgetBand,
+    vibe: mainPlan.vibe,
+    lodgingPreference: mainPlan.lodgingPreference,
+    confidenceScore: Math.max(0, Math.min(100, confidenceScore)),
+    status,
+    likelyAttendeeNames: mainPlan.likelyAttendeeNames,
+    committedAttendeeNames: mainPlan.committedAttendeeNames,
+    unresolvedQuestions: mainPlan.unresolvedQuestions,
+  });
 
-  const matchedIds = new Set<number>();
+  // Process alternatives — true upsert: update matched by ID, insert new, dismiss stale
+  const existingAlts = await storage.getTripAlternativesByGroup(groupId);
+  const matchedExistingIds = new Set<number>();
   const processedAlts: TripAlternative[] = [];
 
   for (const aiAlt of alternatives) {
-    if (!aiAlt.destination && !aiAlt.dateRange) continue; // skip empty alternatives
+    if (!aiAlt.destination && !aiAlt.dateRange) continue;
 
-    // Try to find an existing matching alternative
-    const existing = existingAlts.find(e =>
-      !matchedIds.has(e.id) && alternativesMatch(e, aiAlt)
+    const existing = existingAlts.find(
+      e => !matchedExistingIds.has(e.id) && alternativesMatch(e, aiAlt)
     );
 
-    const likelyNames: string[] = aiAlt.supporterNames ?? [];
-    const committedNames: string[] = aiAlt.committedNames ?? [];
-    const baseVoteCount = existing?.voteCount ?? 0;
-    const supportScore = computeSupportScore(baseVoteCount, committedNames.length, likelyNames.length);
+    const likelyNames = aiAlt.supporterNames ?? [];
+    const committedNames = aiAlt.committedNames ?? [];
 
     if (existing) {
-      matchedIds.add(existing.id);
-      // Update existing — preserve voteCount
-      const [updated] = await Promise.all([
-        storage.upsertTripAlternative(groupId, {
-          destination: aiAlt.destination,
-          dateRange: aiAlt.dateRange,
-          budgetBand: aiAlt.budgetBand ?? null,
-          vibe: aiAlt.vibe ?? null,
-          lodgingPreference: aiAlt.lodgingPreference ?? null,
-          aiSummary: aiAlt.aiSummary ?? null,
-          evidenceSummary: aiAlt.evidenceSummary ?? null,
-          likelyAttendeeNames: likelyNames,
-          committedAttendeeNames: committedNames,
-          supportScore,
-          voteCount: baseVoteCount,
-          status: "active",
-        }),
-      ]);
-      processedAlts.push(updated);
-    } else {
-      // Create new alternative
-      const created = await storage.upsertTripAlternative(groupId, {
+      matchedExistingIds.add(existing.id);
+      // Update existing row — preserve voteCount from explicit votes
+      const preservedVoteCount = existing.voteCount ?? 0;
+      const newSupportScore = computeSupportScore(preservedVoteCount, committedNames.length, likelyNames.length);
+      const updated = await storage.updateTripAlternative(existing.id, {
         destination: aiAlt.destination,
         dateRange: aiAlt.dateRange,
-        budgetBand: aiAlt.budgetBand ?? null,
-        vibe: aiAlt.vibe ?? null,
-        lodgingPreference: aiAlt.lodgingPreference ?? null,
-        aiSummary: aiAlt.aiSummary ?? null,
-        evidenceSummary: aiAlt.evidenceSummary ?? null,
+        budgetBand: aiAlt.budgetBand,
+        vibe: aiAlt.vibe,
+        lodgingPreference: aiAlt.lodgingPreference,
+        aiSummary: aiAlt.aiSummary,
+        evidenceSummary: aiAlt.evidenceSummary,
         likelyAttendeeNames: likelyNames,
         committedAttendeeNames: committedNames,
-        supportScore,
+        supportScore: newSupportScore,
+        voteCount: preservedVoteCount,
+        status: "active",
+      });
+      processedAlts.push(updated);
+    } else {
+      const newSupportScore = computeSupportScore(0, committedNames.length, likelyNames.length);
+      const created = await storage.insertTripAlternative(groupId, {
+        destination: aiAlt.destination,
+        dateRange: aiAlt.dateRange,
+        budgetBand: aiAlt.budgetBand,
+        vibe: aiAlt.vibe,
+        lodgingPreference: aiAlt.lodgingPreference,
+        aiSummary: aiAlt.aiSummary,
+        evidenceSummary: aiAlt.evidenceSummary,
+        likelyAttendeeNames: likelyNames,
+        committedAttendeeNames: committedNames,
+        supportScore: newSupportScore,
         voteCount: 0,
         status: "active",
       });
@@ -465,22 +462,17 @@ RULES:
     }
   }
 
-  // Dismiss existing alternatives that are no longer in the AI output
+  // Dismiss stale alternatives not referenced by AI anymore
   for (const existing of existingAlts) {
-    if (!matchedIds.has(existing.id)) {
+    if (!matchedExistingIds.has(existing.id)) {
       await storage.dismissAlternative(existing.id);
     }
   }
 
-  // Determine winning alternative (highest supportScore, must exceed threshold)
-  const topAlt = processedAlts.reduce((best, a) => {
-    return (a.supportScore ?? 0) > (best?.supportScore ?? 0) ? a : best;
-  }, null as TripAlternative | null);
+  // Determine winning alternative and persist
+  await recalculateWinner(groupId);
 
-  const winningAltId = (topAlt && (topAlt.supportScore ?? 0) > 4) ? topAlt.id : null;
-  await storage.upsertTripPlan(groupId, { winningAlternativeId: winningAltId ?? undefined });
-
-  // Process attendance signals from AI
+  // Process attendance signals from AI (source="ai")
   for (const signal of attendanceSignals) {
     const participant = participantsList.find(
       p => p.name.toLowerCase() === signal.participantName?.toLowerCase()
@@ -491,27 +483,25 @@ RULES:
     if (!level) continue;
 
     if (signal.targetOption === "main" || !signal.targetOption) {
-      await storage.upsertTripAttendance(groupId, participant.id, null, level, "ai");
+      await storage.upsertSupportSignal(groupId, participant.id, null, level, "ai");
     } else {
-      // Try to match to a processed alternative by destination
       const matchingAlt = processedAlts.find(a =>
-        a.destination?.toLowerCase().includes(signal.targetOption?.toLowerCase()) ||
-        signal.targetOption?.toLowerCase().includes((a.destination ?? "").toLowerCase())
+        a.destination?.toLowerCase().includes(signal.targetOption?.toLowerCase() ?? "") ||
+        (signal.targetOption ?? "").toLowerCase().includes((a.destination ?? "").toLowerCase())
       );
       if (matchingAlt) {
-        await storage.upsertTripAttendance(groupId, participant.id, matchingAlt.id, level, "ai");
+        await storage.upsertSupportSignal(groupId, participant.id, matchingAlt.id, level, "ai");
       }
     }
   }
 
-  // Pip message — only post if shouldPipSpeak and not too soon after last message
+  // Pip message — only if shouldPipSpeak and not posted too recently
   if (shouldPipSpeak && pipMessage) {
     const lastPip = await storage.getLastPipMessage(groupId);
     const now = Date.now();
     const lastPipTime = lastPip?.createdAt ? new Date(lastPip.createdAt).getTime() : 0;
     const minutesSinceLastPip = (now - lastPipTime) / (1000 * 60);
 
-    // Don't post if last Pip message was within 3 minutes
     if (minutesSinceLastPip >= 3) {
       await storage.createPipMessage(groupId, pipMessage);
     }
@@ -522,21 +512,68 @@ RULES:
 //  HELPERS
 // ============================================================
 
-function computeTripStatus(
-  confidenceScore: number,
-  messageCount: number,
-  destination: string | null | undefined,
-  committedNames: string[]
-): string {
-  if (confidenceScore >= 80 && committedNames.length >= 1 && destination) {
+async function recalculateWinner(groupId: number): Promise<void> {
+  const alts = await storage.getTripAlternativesByGroup(groupId);
+  if (alts.length === 0) {
+    await storage.upsertTripPlan(groupId, { winningAlternativeId: undefined });
+    return;
+  }
+
+  const top = alts.reduce((best, a) =>
+    (a.supportScore ?? 0) > (best.supportScore ?? 0) ? a : best
+  );
+
+  // Only designate a winner if score exceeds minimum threshold (> 4)
+  const winnerId = (top.supportScore ?? 0) > 4 ? top.id : undefined;
+  await storage.upsertTripPlan(groupId, { winningAlternativeId: winnerId });
+}
+
+interface TripStatusInput {
+  confidenceScore: number;
+  messageCount: number;
+  destination: string | null | undefined;
+  committedNames: string[];
+  unresolvedCount: number;
+  alternativeCount: number;
+  likelyNames: string[];
+  totalParticipants: number;
+}
+
+function computeTripStatus(input: TripStatusInput): string {
+  const {
+    confidenceScore,
+    messageCount,
+    destination,
+    committedNames,
+    unresolvedCount,
+    alternativeCount,
+    likelyNames,
+    totalParticipants,
+  } = input;
+
+  // Trip locked: high confidence, committed attendees, destination set, few conflicts, few open alternatives
+  if (
+    confidenceScore >= 80 &&
+    committedNames.length >= 1 &&
+    destination &&
+    unresolvedCount <= 1 &&
+    alternativeCount <= 1
+  ) {
     return "Trip locked";
   }
-  if (confidenceScore >= 55 && destination) {
+
+  // Almost decided: decent confidence, most participants have a stance
+  const participantsWithStance = committedNames.length + likelyNames.length;
+  const coverageRatio = totalParticipants > 0 ? participantsWithStance / totalParticipants : 0;
+  if (confidenceScore >= 55 && destination && coverageRatio >= 0.5) {
     return "Almost decided";
   }
+
+  // Narrowing options: has a destination and meaningful discussion
   if (messageCount >= 3 && destination) {
     return "Narrowing options";
   }
+
   return "Early ideas";
 }
 
@@ -544,26 +581,62 @@ function computeSupportScore(voteCount: number, committedCount: number, likelyCo
   return voteCount * 3 + committedCount * 2 + likelyCount * 1;
 }
 
-function alternativesMatch(existing: TripAlternative, aiAlt: any): boolean {
+function alternativesMatch(existing: TripAlternative, aiAlt: AiAlternative): boolean {
   const destMatch =
-    existing.destination &&
-    aiAlt.destination &&
+    !!existing.destination &&
+    !!aiAlt.destination &&
     existing.destination.toLowerCase().trim() === aiAlt.destination.toLowerCase().trim();
 
   const dateMatch =
-    existing.dateRange &&
-    aiAlt.dateRange &&
+    !!existing.dateRange &&
+    !!aiAlt.dateRange &&
     existing.dateRange.toLowerCase().trim() === aiAlt.dateRange.toLowerCase().trim();
 
-  return !!(destMatch || dateMatch);
+  return destMatch || dateMatch;
 }
 
-function normalizeCommitmentLevel(level: string): CommitmentLevel | null {
+function normalizeCommitmentLevel(level: string | undefined): CommitmentLevel | null {
   const map: Record<string, CommitmentLevel> = {
     interested: "interested",
     likely: "likely",
     committed: "committed",
     unavailable: "unavailable",
   };
-  return map[level?.toLowerCase()] ?? null;
+  return (level && map[level.toLowerCase()]) ? map[level.toLowerCase()] : null;
+}
+
+function normalizeAiExtraction(raw: Record<string, unknown>): AiTripExtraction {
+  const mainPlan = (raw.mainPlan as Record<string, unknown>) ?? {};
+  return {
+    mainPlan: {
+      destination: (mainPlan.destination as string) ?? null,
+      startDate: (mainPlan.startDate as string) ?? null,
+      endDate: (mainPlan.endDate as string) ?? null,
+      budgetBand: (mainPlan.budgetBand as string) ?? null,
+      vibe: (mainPlan.vibe as string) ?? null,
+      lodgingPreference: (mainPlan.lodgingPreference as string) ?? null,
+      likelyAttendeeNames: Array.isArray(mainPlan.likelyAttendeeNames) ? mainPlan.likelyAttendeeNames as string[] : [],
+      committedAttendeeNames: Array.isArray(mainPlan.committedAttendeeNames) ? mainPlan.committedAttendeeNames as string[] : [],
+      unresolvedQuestions: Array.isArray(mainPlan.unresolvedQuestions) ? mainPlan.unresolvedQuestions as string[] : [],
+    },
+    confidenceScore: typeof raw.confidenceScore === "number" ? raw.confidenceScore : 5,
+    alternatives: Array.isArray(raw.alternatives) ? (raw.alternatives as Record<string, unknown>[]).map(a => ({
+      destination: (a.destination as string) ?? null,
+      dateRange: (a.dateRange as string) ?? null,
+      budgetBand: (a.budgetBand as string) ?? null,
+      vibe: (a.vibe as string) ?? null,
+      lodgingPreference: (a.lodgingPreference as string) ?? null,
+      aiSummary: (a.aiSummary as string) ?? null,
+      evidenceSummary: (a.evidenceSummary as string) ?? null,
+      supporterNames: Array.isArray(a.supporterNames) ? a.supporterNames as string[] : [],
+      committedNames: Array.isArray(a.committedNames) ? a.committedNames as string[] : [],
+    })) : [],
+    attendanceSignals: Array.isArray(raw.attendanceSignals) ? (raw.attendanceSignals as Record<string, unknown>[]).map(s => ({
+      participantName: (s.participantName as string) ?? "",
+      commitmentLevel: (s.commitmentLevel as string) ?? "",
+      targetOption: (s.targetOption as string) ?? "main",
+    })) : [],
+    shouldPipSpeak: raw.shouldPipSpeak === true,
+    pipMessage: (raw.pipMessage as string) ?? null,
+  };
 }

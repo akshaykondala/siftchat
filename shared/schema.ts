@@ -8,7 +8,7 @@ import { relations } from "drizzle-orm";
 export const groups = pgTable("groups", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  shareLinkSlug: text("share_link_slug").notNull().unique(), // e.g. "dinner-friday-123"
+  shareLinkSlug: text("share_link_slug").notNull().unique(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -83,8 +83,8 @@ export const tripAlternatives = pgTable("trip_alternatives", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Tracks per-participant commitment level toward each alternative (or main plan when alternativeId is null)
-export const tripAttendance = pgTable("trip_attendance", {
+// AI-detected and explicit per-participant support signals
+export const supportSignals = pgTable("support_signals", {
   id: serial("id").primaryKey(),
   groupId: integer("group_id").notNull(),
   participantId: integer("participant_id").notNull(),
@@ -158,7 +158,7 @@ export type Plan = typeof plans.$inferSelect;
 export type PlanVote = typeof planVotes.$inferSelect;
 export type TripPlan = typeof tripPlans.$inferSelect;
 export type TripAlternative = typeof tripAlternatives.$inferSelect;
-export type TripAttendance = typeof tripAttendance.$inferSelect;
+export type SupportSignal = typeof supportSignals.$inferSelect;
 export type PipMessage = typeof pipMessages.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
@@ -180,3 +180,41 @@ export type ChatMessage = (MessageWithParticipant & { isPip: false }) | (PipMess
 
 export type TripStatus = "Early ideas" | "Narrowing options" | "Almost decided" | "Trip locked";
 export type CommitmentLevel = "interested" | "likely" | "committed" | "unavailable";
+
+// Typed structure for AI extraction output
+export interface AiTripExtraction {
+  mainPlan: {
+    destination: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    budgetBand: string | null;
+    vibe: string | null;
+    lodgingPreference: string | null;
+    likelyAttendeeNames: string[];
+    committedAttendeeNames: string[];
+    unresolvedQuestions: string[];
+  };
+  confidenceScore: number;
+  alternatives: AiAlternative[];
+  attendanceSignals: AiAttendanceSignal[];
+  shouldPipSpeak: boolean;
+  pipMessage: string | null;
+}
+
+export interface AiAlternative {
+  destination: string | null;
+  dateRange: string | null;
+  budgetBand: string | null;
+  vibe: string | null;
+  lodgingPreference: string | null;
+  aiSummary: string | null;
+  evidenceSummary: string | null;
+  supporterNames: string[];
+  committedNames: string[];
+}
+
+export interface AiAttendanceSignal {
+  participantName: string;
+  commitmentLevel: string;
+  targetOption: string;
+}

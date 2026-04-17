@@ -12,10 +12,10 @@ import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import { format } from "date-fns";
 import {
-  Send, Users, Sparkles, Copy, Share2, X, Loader2, MapPin, Calendar,
+  Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
   DollarSign, Zap, BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
-  Heart, UserCheck, AlertCircle, Menu,
+  Heart, AlertCircle, UserCheck,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel } from "@shared/schema";
 
@@ -438,119 +438,56 @@ function AlternativeCard({
 // ─── Travel Workspace Panel ────────────────────────────────────────────────────
 function TravelWorkspace({
   groupId,
-  groupName,
-  slug,
   participantId,
   trip,
   alternatives,
-  isOpen,
-  onClose,
   tabMode,
+  onCopyLink,
+  onShareSummary,
 }: {
   groupId: number;
-  groupName: string;
-  slug: string;
   participantId: number;
   trip: TripPlan | null | undefined;
   alternatives: TripAlternative[];
-  isOpen: boolean;
-  onClose: () => void;
   tabMode?: boolean;
+  onCopyLink: () => void;
+  onShareSummary: () => void;
 }) {
-  const { toast } = useToast();
   const voteMutation = useVoteAlternative(groupId);
   const attendanceMutation = useUpdateAttendance(groupId);
 
   const winnerAltId = trip?.winningAlternativeId;
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(`${window.location.origin}/g/${slug}`);
-    toast({ title: "Link Copied!", description: "Share it with your crew." });
-  };
-
-  const shareTripSummary = () => {
-    const t = trip;
-    let text = `✈️ ${groupName}\n`;
-    if (t?.destination) text += `📍 ${t.destination}\n`;
-    if (t?.startDate || t?.endDate) {
-      const dates = [t.startDate, t.endDate].filter(Boolean).join(" → ");
-      text += `📅 ${dates}\n`;
-    }
-    if (t?.budgetBand) text += `💰 ${t.budgetBand}\n`;
-    if (t?.vibe) text += `✨ Vibe: ${t.vibe}\n`;
-    if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
-    const committed = t?.committedAttendeeNames ?? [];
-    const likely = t?.likelyAttendeeNames ?? [];
-    // Compute "still deciding": participants not in committed or likely lists
-    // We don't have the full participants list here, so note the statuses
-    if (committed.length) text += `\n✅ Committed: ${committed.join(", ")}`;
-    if (likely.length) text += `\n👍 Likely going: ${likely.join(", ")}`;
-    if (!committed.length && !likely.length) text += `\n❓ Still deciding`;
-    else if (alternatives.filter(a => a.status === "active").length > 1) {
-      text += `\n❓ Still deciding on final option`;
-    }
-    if (t?.status && t.status !== "Trip locked") {
-      text += `\n⚡ Status: ${t.status}`;
-    } else if (t?.status === "Trip locked") {
-      text += `\n🔒 Trip locked!`;
-    }
-    text += `\n\n🔗 Join the planning: ${window.location.origin}/g/${slug}`;
-    navigator.clipboard.writeText(text);
-    toast({ title: "Trip Summary Copied!", description: "Paste it in your group chat." });
-  };
-
   const activeAlternatives = alternatives.filter((a) => a.status === "active");
 
   return (
-    <>
-      {/* Mobile overlay */}
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden"
-          />
-        )}
-      </AnimatePresence>
+    <aside
+      className={cn(
+        "flex flex-col bg-card border-l",
+        tabMode
+          ? "h-full w-full"
+          : "h-full w-96 xl:w-[420px]"
+      )}
+    >
+      {/* Sidebar header */}
+      <div className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md shrink-0">
+        <div className="flex items-center gap-2 font-bold text-primary">
+          <Plane className="w-4 h-4" />
+          <span className="text-sm">Trip Plan</span>
+          {trip?.status && <ConfidencePill status={trip.status} />}
+        </div>
+      </div>
 
-      <motion.aside
-        className={cn(
-          // Tab mode on mobile: inline, fills parent container — no slide-over
-          tabMode
-            ? "flex flex-col h-full w-full bg-card border-l"
-            : cn(
-                "fixed top-0 right-0 h-full w-full sm:w-[420px] bg-card border-l z-50 shadow-2xl flex flex-col",
-                !isOpen && "translate-x-full"
-              ),
-          // Desktop: always static
-          "lg:relative lg:static lg:shadow-none lg:w-96 xl:w-[420px] lg:translate-x-0"
-        )}
-      >
-        {/* Sidebar header */}
-        <div className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md shrink-0">
-          <div className="flex items-center gap-2 font-bold text-primary">
-            <Plane className="w-4 h-4" />
-            <span className="text-sm">Trip Plan</span>
-            {trip?.status && <ConfidencePill status={trip.status} />}
-          </div>
-          <Button variant="ghost" size="icon" onClick={onClose} className="lg:hidden" data-testid="button-close-workspace">
-            <X className="w-5 h-5" />
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 lg:pb-4">
+        {/* Action buttons */}
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={onCopyLink} data-testid="button-copy-link">
+            <Copy className="w-3.5 h-3.5" /> Invite Link
+          </Button>
+          <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={onShareSummary} data-testid="button-share-trip-summary">
+            <Share2 className="w-3.5 h-3.5" /> Share Summary
           </Button>
         </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 lg:pb-4">
-          {/* Action buttons */}
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={copyLink} data-testid="button-copy-link">
-              <Copy className="w-3.5 h-3.5" /> Invite Link
-            </Button>
-            <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={shareTripSummary} data-testid="button-share-trip-summary">
-              <Share2 className="w-3.5 h-3.5" /> Share Summary
-            </Button>
-          </div>
 
           {/* Trip Card */}
           <div>
@@ -594,8 +531,7 @@ function TravelWorkspace({
         <div className="p-3 border-t bg-secondary/10 text-center text-[10px] text-muted-foreground shrink-0">
           Pip updates your plan as the conversation evolves.
         </div>
-      </motion.aside>
-    </>
+      </aside>
   );
 }
 
@@ -657,12 +593,44 @@ export default function GroupPage() {
   const joinGroup = useJoinGroup();
   const sendMessage = useSendMessage();
 
+  const { toast } = useToast();
   const [messageText, setMessageText] = useState("");
   const [participantId, setParticipantId] = useState<number | null>(null);
-  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [forceShowJoin, setForceShowJoin] = useState(false);
   const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(`${window.location.origin}/g/${slug}`);
+    toast({ title: "Link Copied!", description: "Share it with your crew." });
+  };
+
+  const shareTripSummary = () => {
+    const t = trip;
+    const name = group?.name ?? "";
+    let text = `✈️ ${name}\n`;
+    if (t?.destination) text += `📍 ${t.destination}\n`;
+    if (t?.startDate || t?.endDate) {
+      const dates = [t.startDate, t.endDate].filter(Boolean).join(" → ");
+      text += `📅 ${dates}\n`;
+    }
+    if (t?.budgetBand) text += `💰 ${t.budgetBand}\n`;
+    if (t?.vibe) text += `✨ Vibe: ${t.vibe}\n`;
+    if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
+    const committed = t?.committedAttendeeNames ?? [];
+    const likely = t?.likelyAttendeeNames ?? [];
+    if (committed.length) text += `\n✅ Committed: ${committed.join(", ")}`;
+    if (likely.length) text += `\n👍 Likely going: ${likely.join(", ")}`;
+    if (!committed.length && !likely.length) text += `\n❓ Still deciding`;
+    else if (alternatives.filter(a => a.status === "active").length > 1) {
+      text += `\n❓ Still deciding on final option`;
+    }
+    if (t?.status === "Trip locked") text += `\n🔒 Trip locked!`;
+    else if (t?.status) text += `\n⚡ Status: ${t.status ?? "Early ideas"}`;
+    text += `\n\n🔗 Join the planning: ${window.location.origin}/g/${slug}`;
+    navigator.clipboard.writeText(text);
+    toast({ title: "Trip Summary Copied!", description: "Paste it in your group chat." });
+  };
 
   const storedParticipantId = slug ? localStorage.getItem(`evite_participant_${slug}`) : null;
   const participants = group?.participants;
@@ -670,13 +638,6 @@ export default function GroupPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  // Auto-switch to plan tab on mobile when new trip data arrives
-  useEffect(() => {
-    if (trip?.status && trip.status !== "Early ideas" && mobileTab === "chat") {
-      // Don't auto-switch — user drives this
-    }
-  }, [trip?.status]);
 
   const handleJoin = async (name: string) => {
     try {
@@ -779,20 +740,33 @@ export default function GroupPage() {
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <div className="font-bold text-lg truncate font-display">{group.name}</div>
             {trip?.status && (
-              <span className="hidden sm:block shrink-0">
+              <span className="shrink-0">
                 <ConfidencePill status={trip.status} />
               </span>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="lg:hidden text-primary shrink-0"
-            onClick={() => setIsWorkspaceOpen(true)}
-            data-testid="button-open-workspace"
-          >
-            <Sparkles className="w-5 h-5" />
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-primary h-8 w-8"
+              onClick={copyLink}
+              title="Copy invite link"
+              data-testid="button-copy-link-header"
+            >
+              <Copy className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-primary h-8 w-8"
+              onClick={shareTripSummary}
+              title="Share trip summary"
+              data-testid="button-share-summary-header"
+            >
+              <Share2 className="w-4 h-4" />
+            </Button>
+          </div>
         </header>
 
         {/* Messages */}
@@ -854,14 +828,12 @@ export default function GroupPage() {
       )}>
         <TravelWorkspace
           groupId={group.id}
-          groupName={group.name}
-          slug={slug}
           participantId={participantId}
           trip={trip}
           alternatives={alternatives}
-          isOpen={isWorkspaceOpen}
-          onClose={() => setIsWorkspaceOpen(false)}
           tabMode={mobileTab === "plan"}
+          onCopyLink={copyLink}
+          onShareSummary={shareTripSummary}
         />
       </div>
 
@@ -872,7 +844,7 @@ export default function GroupPage() {
             "flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",
             mobileTab === "chat" ? "text-primary" : "text-muted-foreground"
           )}
-          onClick={() => { setMobileTab("chat"); setIsWorkspaceOpen(false); }}
+          onClick={() => setMobileTab("chat")}
           data-testid="tab-chat"
         >
           <MessageCircle className="w-5 h-5" />

@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { api, buildUrl } from "@shared/routes";
-import type { TripPlan, TripAlternative, CommitmentLevel } from "@shared/schema";
+import type { TripPlan, TripAlternative, CommitmentLevel, PipMessage } from "@shared/schema";
 
 export function useTripPlan(groupId: number) {
   return useQuery<TripPlan | null>({
@@ -24,6 +24,20 @@ export function useTripAlternatives(groupId: number) {
     queryFn: async () => {
       const url = buildUrl(api.tripAlternatives.list.path, { groupId });
       const res = await fetch(url);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!groupId,
+    refetchInterval: 5000,
+    initialData: [],
+  });
+}
+
+export function usePipMessages(groupId: number) {
+  return useQuery<PipMessage[]>({
+    queryKey: ["/api/groups/:groupId/pip-messages", groupId],
+    queryFn: async () => {
+      const res = await fetch(`/api/groups/${groupId}/pip-messages`);
       if (!res.ok) return [];
       return res.json();
     },

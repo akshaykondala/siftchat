@@ -46,7 +46,7 @@ export interface IStorage {
 
   // Support Signals (AI-detected and explicit)
   getSupportSignalsByGroup(groupId: number): Promise<SupportSignal[]>;
-  getSupportSignalsByAlternative(alternativeId: number): Promise<SupportSignal[]>;
+  getSupportSignalsByAlternative(groupId: number, alternativeId: number): Promise<SupportSignal[]>;
   upsertSupportSignal(groupId: number, participantId: number, alternativeId: number | null, commitmentLevel: CommitmentLevel, source: "ai" | "explicit"): Promise<SupportSignal>;
   removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void>;
 
@@ -255,8 +255,10 @@ export class DatabaseStorage implements IStorage {
     return record;
   }
 
-  async getSupportSignalsByAlternative(alternativeId: number): Promise<SupportSignal[]> {
-    return db.select().from(supportSignals).where(eq(supportSignals.alternativeId, alternativeId));
+  async getSupportSignalsByAlternative(groupId: number, alternativeId: number): Promise<SupportSignal[]> {
+    return db.select().from(supportSignals).where(
+      and(eq(supportSignals.groupId, groupId), eq(supportSignals.alternativeId, alternativeId))
+    );
   }
 
   async removeSupportSignal(groupId: number, participantId: number, alternativeId: number | null): Promise<void> {

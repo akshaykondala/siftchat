@@ -249,6 +249,14 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Invalid participant for this group" });
       }
 
+      // Validate that alternativeId belongs to this group (prevents cross-group tampering)
+      if (alternativeId !== null) {
+        const alt = await storage.getTripAlternativeById(alternativeId);
+        if (!alt || alt.groupId !== groupId) {
+          return res.status(403).json({ message: "Alternative does not belong to this group" });
+        }
+      }
+
       await storage.upsertSupportSignal(
         groupId,
         participantId,
@@ -529,7 +537,11 @@ RULES:
 // ============================================================
 
 async function recomputeAlternativeScore(groupId: number, alternativeId: number): Promise<void> {
-  const altSignals = await storage.getSupportSignalsByAlternative(alternativeId);
+  // Verify alternative belongs to this group before recomputing
+  const alt = await storage.getTripAlternativeById(alternativeId);
+  if (!alt || alt.groupId !== groupId) return;
+
+  const altSignals = await storage.getSupportSignalsByAlternative(groupId, alternativeId);
 
   // Deduplicate per participant: explicit beats AI for the same participant
   const bestByParticipant = new Map<number, { commitmentLevel: string; source: string }>();

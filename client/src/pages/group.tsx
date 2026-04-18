@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { useRoute } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useLockTrip } from "@/hooks/use-trip";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useLockTrip, useUnlockTrip, usePinboard, useAddPin, useRemovePin } from "@/hooks/use-trip";
 import { usePresence } from "@/hooks/use-presence";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
@@ -10,15 +10,18 @@ import { ShinyCard } from "@/components/ui/shiny-card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { AnimatePresence, motion } from "framer-motion";
-import { format } from "date-fns";
+import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
+import { format, differenceInDays, differenceInHours, differenceInMinutes, differenceInSeconds, parseISO, isValid } from "date-fns";
+import confetti from "canvas-confetti";
 import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
-  DollarSign, BedDouble, TrendingUp, CheckCircle2, HelpCircle,
+  BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
-  Heart, AlertCircle, UserCheck, Lock,
+  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
+import { PipAvatar } from "@/components/pip-avatar";
+import { PipCharacter } from "@/components/pip-character";
 
 // ─── Presence Avatar ────────────────────────────────────────────────────────────
 function PresenceAvatar({ name, size = "sm" }: { name: string; size?: "sm" | "xs" }) {
@@ -210,8 +213,25 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
       <div className="space-y-3">
         <TripField icon={<MapPin className="w-4 h-4" />} label="Destination" value={effectiveDest} placeholder="Undecided" />
         <TripField icon={<Calendar className="w-4 h-4" />} label="Dates" value={effectiveDates} placeholder="Dates TBD" />
-        <TripField icon={<DollarSign className="w-4 h-4" />} label="Budget" value={effectiveBudget} placeholder="Budget TBD" />
-        <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
+        {/* Lodging row — shows finalized link button when available */}
+        {(trip as any).finalizedLodgingUrl ? (
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 text-primary/60 shrink-0"><BedDouble className="w-4 h-4" /></div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">Lodging</div>
+              <a
+                href={(trip as any).finalizedLodgingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors"
+              >
+                <CheckCircle2 className="w-3 h-3" /> View Lodging →
+              </a>
+            </div>
+          </div>
+        ) : (
+          <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
+        )}
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground/60 shrink-0"><Plane className="w-4 h-4" /></span>
           <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground/60 w-20 shrink-0">Flights</span>
@@ -306,7 +326,6 @@ function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
   if (trip.destination) chips.push({ label: trip.destination, color: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300", icon: <MapPin className="w-3 h-3" /> });
   if (trip.startDate) chips.push({ label: trip.startDate, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
   if (trip.endDate && trip.endDate !== trip.startDate) chips.push({ label: `→ ${trip.endDate}`, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
-  if (trip.budgetBand) chips.push({ label: trip.budgetBand, color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <DollarSign className="w-3 h-3" /> });
   if (trip.flightsBooked) chips.push({ label: "Flights booked ✓", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <Plane className="w-3 h-3" /> });
   if (trip.lodgingPreference) chips.push({ label: trip.lodgingPreference, color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300", icon: <BedDouble className="w-3 h-3" /> });
 
@@ -611,11 +630,6 @@ function AlternativeCard({
       </div>
 
       <div className="flex flex-wrap gap-1.5">
-        {alt.budgetBand && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
-            <DollarSign className="w-3 h-3" /> {alt.budgetBand}
-          </span>
-        )}
         {((alt.voteCount ?? 0) > 0 || (alt.supportScore ?? 0) > 0) && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">
             <TrendingUp className="w-3 h-3" />
@@ -692,6 +706,460 @@ function AlternativeCard({
   );
 }
 
+// ─── Featured Flight Card ────────────────────────────────────────────────────
+function FeaturedFlightCard({ trip }: { trip: TripPlan }) {
+  if (!trip.flightSearchUrl && !(trip as any).kayakUrl) return null;
+  const origin = (trip as any).originCity as string | null;
+  const dest = trip.destination ?? "destination";
+  const dates = trip.startDate && trip.endDate ? `${trip.startDate} – ${trip.endDate}` : null;
+  const isBooked = trip.flightsBooked;
+
+  const finalizedUrl = (trip as any).finalizedFlightUrl as string | null;
+
+  if (isBooked) {
+    return (
+      <div className="rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 p-3 space-y-2">
+        <div className="flex items-center gap-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+          <div>
+            <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Flights finalized ✈️</p>
+            {dates && <p className="text-[11px] text-muted-foreground">{origin ? `${origin} → ${dest}` : dest} · {dates}</p>}
+          </div>
+        </div>
+        {finalizedUrl && (
+          <a href={finalizedUrl} target="_blank" rel="noopener noreferrer"
+            className="block w-full text-center rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold h-8 flex items-center justify-center gap-1 transition-colors">
+            <Plane className="w-3 h-3" /> View booking
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50 to-indigo-50 dark:from-violet-950/30 dark:to-indigo-950/30 p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <Plane className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+        <span className="text-xs font-bold text-violet-700 dark:text-violet-300">
+          {origin ? `${origin} → ${dest}` : `Flights to ${dest}`}
+        </span>
+      </div>
+      {dates && <p className="text-[11px] text-muted-foreground pl-5">{dates}</p>}
+      <div className="flex gap-2 pl-5">
+        {trip.flightSearchUrl && (
+          <a href={trip.flightSearchUrl} target="_blank" rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-1 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-semibold h-8 transition-colors">
+            <Plane className="w-3 h-3" /> Google Flights
+          </a>
+        )}
+        {(trip as any).kayakUrl && (
+          <a href={(trip as any).kayakUrl} target="_blank" rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-1 rounded-xl border border-violet-300 dark:border-violet-700 text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-900/30 text-[11px] font-semibold h-8 transition-colors">
+            Kayak
+          </a>
+        )}
+      </div>
+      <p className="text-[10px] text-muted-foreground pl-5 italic">Say "@pip finalize flights" to lock in</p>
+    </div>
+  );
+}
+
+// ─── Featured Lodging Card ───────────────────────────────────────────────────
+function FeaturedLodgingCard({ trip }: { trip: TripPlan }) {
+  const t = trip as any;
+  if (!t.airbnbUrl && !t.hotelsUrl) return null;
+  const dest = trip.destination ?? "destination";
+  const dates = trip.startDate && trip.endDate ? `${trip.startDate} – ${trip.endDate}` : null;
+  const isBooked = t.lodgingBooked;
+  const finalizedLodgingUrl = t.finalizedLodgingUrl as string | null;
+  const guestCount = Math.max(
+    (trip.likelyAttendeeNames?.length ?? 0),
+    (trip.committedAttendeeNames?.length ?? 0),
+  ) || null;
+
+  if (isBooked) {
+    return (
+      <div className="rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 p-3 space-y-2">
+        <div className="flex items-center gap-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+          <div>
+            <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Lodging finalized 🏠</p>
+            {dates && <p className="text-[11px] text-muted-foreground">{dest} · {dates}</p>}
+          </div>
+        </div>
+        {finalizedLodgingUrl && (
+          <a href={finalizedLodgingUrl} target="_blank" rel="noopener noreferrer"
+            className="block w-full text-center rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold h-8 flex items-center justify-center gap-1 transition-colors">
+            <BedDouble className="w-3 h-3" /> View booking
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <BedDouble className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+        <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Places to stay in {dest}</span>
+      </div>
+      {(dates || guestCount) && (
+        <p className="text-[11px] text-muted-foreground pl-5">
+          {[dates, guestCount ? `${guestCount} guests` : null].filter(Boolean).join(" · ")}
+        </p>
+      )}
+      <div className="flex gap-2 pl-5">
+        {t.airbnbUrl && (
+          <a href={t.airbnbUrl} target="_blank" rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-1 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-semibold h-8 transition-colors">
+            Airbnb
+          </a>
+        )}
+        {t.hotelsUrl && (
+          <a href={t.hotelsUrl} target="_blank" rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-1 rounded-xl border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30 text-[11px] font-semibold h-8 transition-colors">
+            Booking.com
+          </a>
+        )}
+      </div>
+      <p className="text-[10px] text-muted-foreground pl-5 italic">Say "@pip finalize lodging" to lock in</p>
+    </div>
+  );
+}
+
+// ─── Countdown Hook ────────────────────────────────────────────────────────────
+function parseFlexibleDate(s: string): Date | null {
+  const now = new Date();
+  // Bump to future: set year to current year; if still past, use next year
+  const bumpToFuture = (d: Date): Date => {
+    if (d >= now) return d;
+    const b = new Date(d);
+    b.setFullYear(now.getFullYear());
+    if (b < now) b.setFullYear(now.getFullYear() + 1);
+    return b;
+  };
+  let d = parseISO(s);
+  if (isValid(d)) return bumpToFuture(d);
+  d = new Date(s);
+  if (isValid(d)) return bumpToFuture(d);
+  // No year — try current year, bump if past
+  d = new Date(`${s} ${now.getFullYear()}`);
+  if (isValid(d)) return bumpToFuture(d);
+  return null;
+}
+
+function useCountdown(targetDateStr: string | null | undefined) {
+  const [remaining, setRemaining] = useState<{ days: number; hours: number; mins: number; secs: number } | null>(null);
+
+  useEffect(() => {
+    if (!targetDateStr) return;
+    const target = parseFlexibleDate(targetDateStr);
+    if (!target) return;
+
+    const tick = () => {
+      const now = new Date();
+      const totalSecs = differenceInSeconds(target!, now);
+      if (totalSecs <= 0) { setRemaining({ days: 0, hours: 0, mins: 0, secs: 0 }); return; }
+      const days = differenceInDays(target!, now);
+      const hours = differenceInHours(target!, now) % 24;
+      const mins = differenceInMinutes(target!, now) % 60;
+      const secs = totalSecs % 60;
+      setRemaining({ days, hours, mins, secs });
+    };
+
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [targetDateStr]);
+
+  return remaining;
+}
+
+// ─── Locked Trip Panel ─────────────────────────────────────────────────────────
+function LockedTripPanel({ trip, onUnlock, isUnlocking, onShareSummary }: {
+  trip: TripPlan;
+  onUnlock: () => void;
+  isUnlocking: boolean;
+  onShareSummary: () => void;
+}) {
+  const t = trip as any;
+  const dest = trip.destination ?? "Your Trip";
+  const origin = t.originCity as string | null;
+  const dates = trip.startDate && trip.endDate ? `${trip.startDate} → ${trip.endDate}` : trip.startDate ?? null;
+  const committed = trip.committedAttendeeNames ?? [];
+  const likely = trip.likelyAttendeeNames ?? [];
+  const countdown = useCountdown(trip.startDate);
+  const isTripped = countdown?.days === 0 && countdown?.hours === 0 && countdown?.mins === 0 && countdown?.secs === 0;
+
+  const flightsBooked = !!trip.flightsBooked;
+  const lodgingBooked = !!t.lodgingBooked;
+  const allBooked = flightsBooked && lodgingBooked;
+  const pipControls = useAnimationControls();
+  const lastMinRef = useRef<number>(-1);
+  const lastHrRef = useRef<number>(-1);
+  const lastDayRef = useRef<number>(-1);
+
+  useEffect(() => {
+    if (!countdown) return;
+    const { days, hours, mins } = countdown;
+
+    // New day — big party jump
+    if (lastDayRef.current !== -1 && days !== lastDayRef.current) {
+      lastDayRef.current = days;
+      pipControls.start({
+        x: [0, -14, 14, -10, 10, -5, 5, 0],
+        y: [0, -22, -6, -18, -2, -10, 0],
+        rotate: [0, -10, 10, -7, 7, 0],
+        scale: [1, 1.15, 0.92, 1.1, 1],
+        transition: { duration: 0.9, ease: "easeOut" },
+      });
+      return;
+    }
+    lastDayRef.current = days;
+
+    // New hour — excited hop
+    if (lastHrRef.current !== -1 && hours !== lastHrRef.current) {
+      lastHrRef.current = hours;
+      pipControls.start({
+        y: [0, -16, 2, -10, 0],
+        scale: [1, 1.1, 0.95, 1.05, 1],
+        transition: { duration: 0.6, ease: "easeOut" },
+      });
+      return;
+    }
+    lastHrRef.current = hours;
+
+    // New minute — little bounce
+    if (lastMinRef.current !== -1 && mins !== lastMinRef.current) {
+      lastMinRef.current = mins;
+      pipControls.start({
+        y: [0, -10, 0],
+        rotate: [0, -5, 5, 0],
+        transition: { duration: 0.45, ease: "easeOut" },
+      });
+      return;
+    }
+    lastMinRef.current = mins;
+  }, [countdown?.days, countdown?.hours, countdown?.mins]);
+
+  return (
+    <div className="flex-1 overflow-y-auto flex flex-col">
+      {/* ── Hero ── */}
+      <motion.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: "easeOut" }}
+        className="relative overflow-hidden bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-500 text-white px-6 pt-8 pb-6 shrink-0"
+      >
+        {/* subtle shimmer rings */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-white/10" />
+          <div className="absolute -bottom-8 -left-8 w-36 h-36 rounded-full bg-white/10" />
+        </div>
+
+        <div className="relative text-center space-y-1 mb-4">
+          <div className="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-wider mb-3">
+            <Lock className="w-3 h-3" /> Trip Locked
+          </div>
+          <h1 className="text-3xl font-black tracking-tight drop-shadow-sm">
+            {origin ? `${origin} → ${dest}` : dest}
+          </h1>
+          {dates && <p className="text-emerald-100 text-sm font-medium">{dates}</p>}
+        </div>
+
+        {/* Pip + Countdown */}
+        {countdown && trip.startDate ? (
+          isTripped ? (
+            <motion.div initial={{ scale: 0.8 }} animate={{ scale: 1 }} className="text-center text-5xl font-black mb-2">
+              ✈️ It's trip time!
+            </motion.div>
+          ) : (
+            <div className="flex flex-col items-center gap-3 mb-2">
+              {/* Big New Year's-style single-line countdown */}
+              <div className="flex items-end justify-center gap-1 tabular-nums">
+                {[
+                  { val: countdown.days, label: "d" },
+                  { val: countdown.hours, label: "h" },
+                  { val: countdown.mins, label: "m" },
+                  { val: countdown.secs, label: "s" },
+                ].map(({ val, label }, i) => (
+                  <React.Fragment key={label}>
+                    {i > 0 && (
+                      <motion.span
+                        animate={{ opacity: [1, 0.3, 1] }}
+                        transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
+                        className="text-4xl font-black text-white/60 leading-none mb-1"
+                      >
+                        :
+                      </motion.span>
+                    )}
+                    <div className="flex flex-col items-center">
+                      <motion.div
+                        key={`${label}-${val}`}
+                        initial={{ y: -8, opacity: 0.4 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                        className="text-5xl font-black leading-none drop-shadow-lg"
+                      >
+                        {String(val).padStart(2, "0")}
+                      </motion.div>
+                      <div className="text-[9px] text-emerald-200/80 uppercase tracking-widest mt-0.5">{label === "d" ? "days" : label === "h" ? "hrs" : label === "m" ? "min" : "sec"}</div>
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+
+              {/* Pip below the countdown, reacts to milestones */}
+              <motion.div animate={pipControls}>
+                <PipCharacter speeches={[
+                  `${countdown.days} day${countdown.days === 1 ? "" : "s"} to go! 🎉`,
+                  "SO excited for this trip!",
+                  "Let's goooo! ✈️",
+                  "This is gonna be amazing!",
+                  "Pack light, dream big! 🌍",
+                  "Can't wait! 🧳",
+                ]} />
+              </motion.div>
+            </div>
+          )
+        ) : (
+          <div className="flex justify-center mb-2">
+            <PipCharacter speeches={["SO excited for this trip!", "Let's goooo! ✈️", "This is gonna be amazing!", "Can't wait! 🧳"]} />
+          </div>
+        )}
+      </motion.div>
+
+      {/* ── Content ── */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-4">
+        {/* Checklist */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="rounded-2xl border border-border bg-card p-4 space-y-3"
+        >
+          <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Booking Status</div>
+
+          {/* Flights row */}
+          <div className={cn(
+            "flex items-center gap-3 rounded-xl p-3 transition-colors",
+            flightsBooked ? "bg-emerald-50 dark:bg-emerald-950/30" : "bg-violet-50/60 dark:bg-violet-950/20"
+          )}>
+            <div className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+              flightsBooked ? "bg-emerald-500" : "bg-violet-200 dark:bg-violet-800"
+            )}>
+              {flightsBooked
+                ? <CheckCircle2 className="w-4 h-4 text-white" />
+                : <Plane className="w-4 h-4 text-violet-600 dark:text-violet-300" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={cn("text-xs font-bold", flightsBooked ? "text-emerald-700 dark:text-emerald-300" : "text-foreground")}>
+                {flightsBooked ? "Flights finalized ✓" : "Flights not yet booked"}
+              </div>
+              {!flightsBooked && <div className="text-[11px] text-muted-foreground">Say "@pip finalize flights [link]"</div>}
+            </div>
+            {flightsBooked && t.finalizedFlightUrl && (
+              <a href={t.finalizedFlightUrl} target="_blank" rel="noopener noreferrer"
+                className="shrink-0 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline">
+                View →
+              </a>
+            )}
+            {!flightsBooked && trip.flightSearchUrl && (
+              <a href={trip.flightSearchUrl} target="_blank" rel="noopener noreferrer"
+                className="shrink-0 px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-bold transition-colors">
+                Search
+              </a>
+            )}
+          </div>
+
+          {/* Lodging row */}
+          <div className={cn(
+            "flex items-center gap-3 rounded-xl p-3 transition-colors",
+            lodgingBooked ? "bg-emerald-50 dark:bg-emerald-950/30" : "bg-amber-50/60 dark:bg-amber-950/20"
+          )}>
+            <div className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+              lodgingBooked ? "bg-emerald-500" : "bg-amber-200 dark:bg-amber-800"
+            )}>
+              {lodgingBooked
+                ? <CheckCircle2 className="w-4 h-4 text-white" />
+                : <BedDouble className="w-4 h-4 text-amber-600 dark:text-amber-300" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={cn("text-xs font-bold", lodgingBooked ? "text-emerald-700 dark:text-emerald-300" : "text-foreground")}>
+                {lodgingBooked ? "Lodging finalized ✓" : "Lodging not yet booked"}
+              </div>
+              {!lodgingBooked && <div className="text-[11px] text-muted-foreground">Say "@pip finalize lodging [link]"</div>}
+            </div>
+            {lodgingBooked && t.finalizedLodgingUrl && (
+              <a href={t.finalizedLodgingUrl} target="_blank" rel="noopener noreferrer"
+                className="shrink-0 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline">
+                View →
+              </a>
+            )}
+            {!lodgingBooked && t.airbnbUrl && (
+              <a href={t.airbnbUrl} target="_blank" rel="noopener noreferrer"
+                className="shrink-0 px-2.5 py-1 rounded-lg bg-rose-500 hover:bg-rose-600 text-white text-[10px] font-bold transition-colors">
+                Airbnb
+              </a>
+            )}
+          </div>
+
+          {allBooked && (
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="text-center text-sm font-bold text-emerald-600 dark:text-emerald-400 py-1"
+            >
+              🎉 All booked — you're ready to go!
+            </motion.div>
+          )}
+        </motion.div>
+
+        {/* Who's going — committed only, deduplicated */}
+        {[...new Set(committed)].length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+            className="rounded-2xl border border-border bg-card p-4 space-y-3"
+          >
+            <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">The Crew</div>
+            <div className="flex flex-wrap gap-2">
+              {[...new Set(committed)].map((name) => (
+                <div key={name} className="flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 rounded-full pl-1 pr-3 py-1">
+                  <PresenceAvatar name={name} size="xs" />
+                  <span className="text-xs font-semibold">{name}</span>
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Actions */}
+        <div className="space-y-2 pt-1">
+          <Button
+            className="w-full gap-2 rounded-xl h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+            onClick={onShareSummary}
+          >
+            <Share2 className="w-4 h-4" /> Share Trip Summary
+          </Button>
+          <button
+            onClick={onUnlock}
+            disabled={isUnlocking}
+            className="w-full flex items-center justify-center gap-2 rounded-xl border border-muted-foreground/20 text-muted-foreground hover:text-foreground hover:border-muted-foreground/40 text-xs font-medium h-9 transition-colors disabled:opacity-50"
+          >
+            {isUnlocking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LockOpen className="w-3.5 h-3.5" />}
+            Unlock trip (back to planning)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Travel Workspace Panel ────────────────────────────────────────────────────
 function TravelWorkspace({
   groupId,
@@ -699,7 +1167,6 @@ function TravelWorkspace({
   trip,
   alternatives,
   tabMode,
-  onCopyLink,
   onShareSummary,
 }: {
   groupId: number;
@@ -707,12 +1174,12 @@ function TravelWorkspace({
   trip: TripPlan | null | undefined;
   alternatives: TripAlternative[];
   tabMode?: boolean;
-  onCopyLink: () => void;
   onShareSummary: () => void;
 }) {
   const voteMutation = useVoteAlternative(groupId);
   const attendanceMutation = useUpdateAttendance(groupId);
   const lockMutation = useLockTrip(groupId);
+  const unlockMutation = useUnlockTrip(groupId);
 
   const winnerAltId = trip?.winningAlternativeId;
   const isLocked = trip?.status === "Trip locked";
@@ -729,33 +1196,33 @@ function TravelWorkspace({
       )}
     >
       {/* Sidebar header */}
-      <div className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md shrink-0">
+      <div className={cn(
+        "h-16 border-b flex items-center justify-between px-4 backdrop-blur-md shrink-0",
+        isLocked
+          ? "bg-emerald-50/80 dark:bg-emerald-950/30"
+          : "bg-white/50 dark:bg-zinc-900/50"
+      )}>
         <div className="flex items-center gap-2 font-bold text-primary">
-          <Plane className="w-4 h-4" />
-          <span className="text-sm">Trip Plan</span>
-          {trip?.status && <ConfidencePill status={trip.status} />}
+          {isLocked ? <Lock className="w-4 h-4 text-emerald-600" /> : <Plane className="w-4 h-4" />}
+          <span className="text-sm">{isLocked ? "Trip Locked 🔒" : "Trip Plan"}</span>
+          {!isLocked && trip?.status && <ConfidencePill status={trip.status} />}
         </div>
+        {!isLocked && (
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={onShareSummary} data-testid="button-share-trip-summary">
+            <Share2 className="w-3.5 h-3.5" /> Share
+          </Button>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 lg:pb-4">
-        {/* Action buttons */}
-        <div className="flex gap-2">
-          <Button variant="outline" className="flex-1 gap-1.5 rounded-xl text-xs h-9" onClick={onCopyLink} data-testid="button-copy-link">
-            <Copy className="w-3.5 h-3.5" /> Invite Link
-          </Button>
-          <Button
-            variant={isLocked ? "default" : "outline"}
-            className={cn(
-              "flex-1 gap-1.5 rounded-xl text-xs h-9",
-              isLocked && "bg-emerald-600 hover:bg-emerald-700 text-white border-0 ring-2 ring-emerald-400 ring-offset-1"
-            )}
-            onClick={onShareSummary}
-            data-testid="button-share-trip-summary"
-          >
-            <Share2 className="w-3.5 h-3.5" /> Share Summary
-          </Button>
-        </div>
-
+      {isLocked && trip ? (
+        <LockedTripPanel
+          trip={trip}
+          onUnlock={() => unlockMutation.mutate()}
+          isUnlocking={unlockMutation.isPending}
+          onShareSummary={onShareSummary}
+        />
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 lg:pb-4">
           {/* Trip Card */}
           <div>
             <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Current Plan</div>
@@ -764,6 +1231,22 @@ function TravelWorkspace({
               winnerAlt={winnerAltId ? alternatives.find((a) => a.id === winnerAltId) ?? null : null}
             />
           </div>
+
+          {/* Featured Flight */}
+          {trip && (trip.flightSearchUrl || (trip as any).kayakUrl) && (
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Flights</div>
+              <FeaturedFlightCard trip={trip} />
+            </div>
+          )}
+
+          {/* Featured Lodging */}
+          {trip && ((trip as any).airbnbUrl || (trip as any).hotelsUrl) && (
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Lodging</div>
+              <FeaturedLodgingCard trip={trip} />
+            </div>
+          )}
 
           {/* Planning Signals */}
           {trip && (
@@ -812,16 +1295,141 @@ function TravelWorkspace({
             </div>
           )}
         </div>
+      )}
 
-        <div className="p-3 border-t bg-secondary/10 text-center text-[10px] text-muted-foreground shrink-0">
-          Pip updates your plan as the conversation evolves.
+      <div className="p-3 border-t bg-secondary/10 text-center text-[10px] text-muted-foreground shrink-0">
+        {isLocked ? "Trip is locked — use the unlock button to make changes." : "Pip updates your plan as the conversation evolves."}
+      </div>
+    </aside>
+  );
+}
+
+function PipThinkingBubble() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      className="flex items-start gap-2 max-w-[85%] sm:max-w-[75%]"
+    >
+      <PipAvatar />
+      <div>
+        <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
+        <div className="px-4 py-2.5 rounded-2xl rounded-tl-none bg-gradient-to-br from-violet-100 to-indigo-100 dark:from-violet-900/30 dark:to-indigo-900/30 shadow-sm border border-violet-200/50 dark:border-violet-800/50 flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:0ms]" />
+          <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:150ms]" />
+          <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:300ms]" />
         </div>
-      </aside>
+      </div>
+    </motion.div>
   );
 }
 
 // ─── Chat Messages ─────────────────────────────────────────────────────────────
+function FlightPipMessage({ text, googleUrl, kayakUrl, time }: { text: string; googleUrl: string | null; kayakUrl: string | null; time: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-start gap-2 max-w-[85%] sm:max-w-[75%]"
+      data-testid="message-pip-flight"
+    >
+      <PipAvatar />
+      <div>
+        <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
+        <div className="px-4 py-3 rounded-2xl rounded-tl-none text-sm leading-relaxed bg-gradient-to-br from-violet-100 to-indigo-100 text-violet-900 dark:from-violet-900/30 dark:to-indigo-900/30 dark:text-violet-100 shadow-sm border border-violet-200/50 dark:border-violet-800/50 space-y-3">
+          <div className="flex items-start gap-2">
+            <Plane className="w-4 h-4 shrink-0 mt-0.5 text-violet-500" />
+            <span>{text}</span>
+          </div>
+          {(googleUrl || kayakUrl) && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {googleUrl && (
+                <a
+                  href={googleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/70 dark:bg-white/10 text-violet-700 dark:text-violet-300 border border-violet-300/50 dark:border-violet-600/50 hover:bg-white dark:hover:bg-white/20 transition-colors"
+                >
+                  <Plane className="w-3 h-3" /> Search Google Flights
+                </a>
+              )}
+              {kayakUrl && (
+                <a
+                  href={kayakUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/70 dark:bg-white/10 text-violet-700 dark:text-violet-300 border border-violet-300/50 dark:border-violet-600/50 hover:bg-white dark:hover:bg-white/20 transition-colors"
+                >
+                  <Plane className="w-3 h-3" /> Check Kayak
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
+      </div>
+    </motion.div>
+  );
+}
+
+function LodgingPipMessage({ destination, airbnbUrl, hotelsUrl, time }: { destination: string; airbnbUrl: string | null; hotelsUrl: string | null; time: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-start gap-2 max-w-[85%] sm:max-w-[75%]"
+      data-testid="message-pip-lodging"
+    >
+      <PipAvatar />
+      <div>
+        <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 mb-1">Pip</div>
+        <div className="px-4 py-3 rounded-2xl rounded-tl-none text-sm leading-relaxed bg-gradient-to-br from-amber-100 to-orange-100 text-amber-900 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-100 shadow-sm border border-amber-200/50 dark:border-amber-800/50 space-y-3">
+          <div className="flex items-start gap-2">
+            <BedDouble className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+            <span>Here are some places to stay in {destination} — check the trip panel for quick access any time!</span>
+          </div>
+          {(airbnbUrl || hotelsUrl) && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {airbnbUrl && (
+                <a href={airbnbUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/70 dark:bg-white/10 text-amber-700 dark:text-amber-300 border border-amber-300/50 dark:border-amber-600/50 hover:bg-white dark:hover:bg-white/20 transition-colors">
+                  <BedDouble className="w-3 h-3" /> Search Airbnb
+                </a>
+              )}
+              {hotelsUrl && (
+                <a href={hotelsUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/70 dark:bg-white/10 text-amber-700 dark:text-amber-300 border border-amber-300/50 dark:border-amber-600/50 hover:bg-white dark:hover:bg-white/20 transition-colors">
+                  <BedDouble className="w-3 h-3" /> Search Booking.com
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
+      </div>
+    </motion.div>
+  );
+}
+
 function PipMessage({ content, time }: { content: string; time: string }) {
+  if (content.startsWith("FLIGHT_REC:")) {
+    try {
+      const payload = JSON.parse(content.slice("FLIGHT_REC:".length));
+      return <FlightPipMessage text={payload.text} googleUrl={payload.googleUrl} kayakUrl={payload.kayakUrl} time={time} />;
+    } catch {
+      // fall through to plain render
+    }
+  }
+  if (content.startsWith("LODGING_REC:")) {
+    try {
+      const payload = JSON.parse(content.slice("LODGING_REC:".length));
+      return <LodgingPipMessage destination={payload.destination} airbnbUrl={payload.airbnbUrl} hotelsUrl={payload.hotelsUrl} time={time} />;
+    } catch {
+      // fall through to plain render
+    }
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -829,9 +1437,7 @@ function PipMessage({ content, time }: { content: string; time: string }) {
       className="flex items-start gap-2 max-w-[85%] sm:max-w-[75%]"
       data-testid="message-pip"
     >
-      <div className="h-7 w-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
-        <Sparkles className="w-3.5 h-3.5 text-white" />
-      </div>
+      <PipAvatar />
       <div>
         <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
         <div className="px-4 py-2.5 rounded-2xl rounded-tl-none text-sm leading-relaxed bg-gradient-to-br from-violet-100 to-indigo-100 text-violet-900 dark:from-violet-900/30 dark:to-indigo-900/30 dark:text-violet-100 shadow-sm border border-violet-200/50 dark:border-violet-800/50">
@@ -840,6 +1446,15 @@ function PipMessage({ content, time }: { content: string; time: string }) {
         <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
       </div>
     </motion.div>
+  );
+}
+
+function renderWithPipMention(content: string) {
+  const parts = content.split(/(@pip\b)/gi);
+  return parts.map((part, i) =>
+    /^@pip$/i.test(part)
+      ? <span key={i} className="font-semibold text-violet-500 dark:text-violet-400">{part}</span>
+      : part
   );
 }
 
@@ -853,12 +1468,12 @@ function UserMessage({ content, name, isMe, time }: { content: string; name: str
     >
       {!isMe && <span className="text-xs font-semibold text-muted-foreground mb-1">{name}</span>}
       <div className={cn(
-        "px-4 py-2 rounded-2xl text-sm shadow-sm leading-relaxed break-words",
+        "px-4 py-2 rounded-2xl text-sm shadow-sm leading-relaxed break-all",
         isMe
           ? "bg-primary text-primary-foreground rounded-tr-none"
           : "bg-white dark:bg-zinc-800 border rounded-tl-none"
       )}>
-        {content}
+        {renderWithPipMention(content)}
       </div>
       <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
     </motion.div>
@@ -900,10 +1515,31 @@ export default function GroupPage() {
   const [participantId, setParticipantId] = useState<number | null>(null);
   const [forceShowJoin, setForceShowJoin] = useState(false);
   const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
+  const prevPipCountRef = useRef(0);
+  const prevMsgCountRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const isTyping = messageText.trim().length > 0;
-  const { otherOnline, typingUsers } = usePresence(group?.id ?? 0, participantId, isTyping);
+  const { otherOnline, typingUsers, pipIsThinking } = usePresence(group?.id ?? 0, participantId, isTyping);
+  const prevTripStatusRef = useRef<string | null | undefined>(undefined);
+  const isLocked = trip?.status === "Trip locked";
+
+  // Fire confetti + auto-switch to plan tab when trip becomes locked
+  useEffect(() => {
+    const prev = prevTripStatusRef.current;
+    const current = trip?.status;
+    if (prev !== undefined && prev !== "Trip locked" && current === "Trip locked") {
+      setMobileTab("plan");
+      const fire = (particleRatio: number, opts: object) =>
+        confetti({ origin: { y: 0.6 }, ...opts, particleCount: Math.floor(200 * particleRatio) });
+      fire(0.25, { spread: 26, startVelocity: 55 });
+      fire(0.2, { spread: 60 });
+      fire(0.35, { spread: 100, decay: 0.91, scalar: 0.8 });
+      fire(0.1, { spread: 120, startVelocity: 25, decay: 0.92, scalar: 1.2 });
+      fire(0.1, { spread: 120, startVelocity: 45 });
+    }
+    prevTripStatusRef.current = current;
+  }, [trip?.status]);
 
   const copyLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}/g/${slug}`);
@@ -955,6 +1591,13 @@ export default function GroupPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    const pipCount = messages?.filter(m => m.isPip).length ?? 0;
+    const msgCount = messages?.length ?? 0;
+    prevPipCountRef.current = pipCount;
+    prevMsgCountRef.current = msgCount;
   }, [messages]);
 
   const handleJoin = async (name: string) => {
@@ -1049,10 +1692,11 @@ export default function GroupPage() {
 
       {/* ── LEFT: Chat Panel ── */}
       <div className={cn(
-        "flex-1 flex flex-col h-full relative min-w-0",
+        "flex flex-col h-full relative min-w-0",
         "lg:flex",
         mobileTab === "plan" ? "hidden" : "flex",
-        "pb-14 lg:pb-0" // bottom padding clears the fixed mobile tab bar
+        "pb-14 lg:pb-0",
+        isLocked ? "lg:w-80 xl:w-96" : "flex-1"
       )}>
         {/* Header */}
         <header className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0">
@@ -1137,6 +1781,7 @@ export default function GroupPage() {
                 />
               );
             })}
+            {pipIsThinking && <PipThinkingBubble key="pip-thinking" />}
           </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>
@@ -1152,7 +1797,7 @@ export default function GroupPage() {
             <Input
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder="Share your thoughts on the trip..."
+              placeholder="Message the group, or @pip to ask Pip directly…"
               className="rounded-full pl-6 bg-secondary/50 border-transparent focus:bg-background focus:border-primary/20 transition-all shadow-inner"
               data-testid="input-message"
             />
@@ -1170,11 +1815,12 @@ export default function GroupPage() {
       </div>
 
       {/* ── RIGHT: Travel Workspace ──
-           Desktop: static side panel (w-96/w-420)
+           Desktop: flex-1 when locked (dominant), fixed width when planning
            Mobile tab mode (mobileTab="plan"): full-width inline panel ── */}
       <div className={cn(
         "lg:block lg:h-full lg:overflow-hidden",
-        mobileTab === "plan" ? "block h-full flex-1" : "hidden"
+        mobileTab === "plan" ? "block h-full flex-1" : "hidden",
+        isLocked ? "lg:flex-1" : "lg:w-96 xl:w-[420px]"
       )}>
         <TravelWorkspace
           groupId={group.id}
@@ -1182,7 +1828,6 @@ export default function GroupPage() {
           trip={trip}
           alternatives={alternatives}
           tabMode={mobileTab === "plan"}
-          onCopyLink={copyLink}
           onShareSummary={shareTripSummary}
         />
       </div>

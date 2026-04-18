@@ -7,6 +7,24 @@ import { openai } from "./replit_integrations/audio/client";
 import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
 
 // ============================================================
+//  AI ANALYSIS COOLDOWN
+//  Only re-analyze after 5 new messages OR 3 minutes, whichever comes first.
+// ============================================================
+
+interface AnalysisCooldown {
+  lastMessageCount: number;
+  lastRunAt: number;
+}
+const analysisCooldowns = new Map<number, AnalysisCooldown>();
+const COOLDOWN_MIN_MS = 45 * 1000;
+
+function willAnalyze(groupId: number): boolean {
+  const cooldown = analysisCooldowns.get(groupId);
+  if (!cooldown) return true;
+  return Date.now() - cooldown.lastRunAt >= COOLDOWN_MIN_MS;
+}
+
+// ============================================================
 //  IN-MEMORY PRESENCE STORE
 // ============================================================
 
@@ -20,6 +38,29 @@ interface PresenceEntry {
 
 // groupId -> Map<participantId, PresenceEntry>
 const presenceStore = new Map<number, Map<number, PresenceEntry>>();
+
+// groupId -> timestamp when pip started thinking (cleared when pip responds)
+const pipThinkingStore = new Map<number, number>();
+const PIP_THINKING_TIMEOUT_MS = 30_000; // auto-clear after 30s as safety net
+
+// groupId -> 'flights' | 'lodging' when Pip is waiting for a booking link
+const pendingFinalizationStore = new Map<number, 'flights' | 'lodging'>();
+
+export function setPipThinking(groupId: number) {
+  pipThinkingStore.set(groupId, Date.now());
+}
+export function clearPipThinking(groupId: number) {
+  pipThinkingStore.delete(groupId);
+}
+export function isPipThinking(groupId: number): boolean {
+  const since = pipThinkingStore.get(groupId);
+  if (!since) return false;
+  if (Date.now() - since > PIP_THINKING_TIMEOUT_MS) {
+    pipThinkingStore.delete(groupId);
+    return false;
+  }
+  return true;
+}
 
 const ONLINE_TIMEOUT_MS = 30_000;   // 30s — participant is "online"
 const TYPING_TIMEOUT_MS = 20_000;   // 20s — safety net auto-clear; client refreshes every 2s while actively typing
@@ -150,10 +191,32 @@ export async function registerRoutes(
 
       const message = await storage.createMessage(groupId, input.participantId, input.content);
 
-      // Fire-and-forget travel AI analysis
-      analyzeTripChat(groupId).catch(err => console.error("Trip analysis error:", err));
+      // If Pip is waiting for a booking link, intercept any URL in any message
+      const pendingFinalize = pendingFinalizationStore.get(groupId);
+      const urlMatch = input.content.match(/https?:\/\/[^\s]+/);
+      if (pendingFinalize && urlMatch) {
+        pendingFinalizationStore.delete(groupId);
+        setPipThinking(groupId);
+        handlePendingFinalization(groupId, pendingFinalize, urlMatch[0]).catch(err => console.error("Pending finalization error:", err));
+        return res.status(201).json({ ...message, pipAnalyzing: true });
+      }
 
-      res.status(201).json(message);
+      const isPipMention = /@pip\b/i.test(input.content);
+      // Only show thinking bubble if there's enough chat context for Pip to respond
+      const existingMsgCount = await storage.getMessagesByGroup(groupId).then(m => m.length);
+      const hasEnoughContext = existingMsgCount >= 3;
+      const pipAnalyzing = isPipMention || (hasEnoughContext && willAnalyze(groupId));
+
+      if (isPipMention) {
+        const question = input.content.replace(/@pip\b/gi, "").trim();
+        setPipThinking(groupId);
+        respondToPipMention(groupId, question || input.content).catch(err => console.error("Pip mention error:", err));
+      } else if (pipAnalyzing) {
+        setPipThinking(groupId);
+        analyzeTripChat(groupId).catch(err => console.error("Trip analysis error:", err));
+      }
+
+      res.status(201).json({ ...message, pipAnalyzing });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0].message });
@@ -366,11 +429,20 @@ export async function registerRoutes(
     });
 
     const destLabel = dest ? ` to ${dest}` : "";
-    await storage.createPipMessage(
+    await postPipMessage(
       groupId,
       `🔒 The trip${destLabel} is officially locked! Congrats everyone — time to get packing! Share the trip summary to let everyone know the final plan.`
     );
 
+    res.json({ success: true });
+  });
+
+  app.post(api.tripLock.unlock.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const trip = await storage.getTripPlanByGroup(groupId);
+    if (!trip) return res.status(404).json({ message: "Trip plan not found" });
+    await storage.upsertTripPlan(groupId, { status: "Almost decided", confidenceScore: 85 });
+    await postPipMessage(groupId, "Trip unlocked 🔓 — back to planning mode! Let me know if anything changed.");
     res.json({ success: true });
   });
 
@@ -380,6 +452,26 @@ export async function registerRoutes(
     const groupId = Number(req.params.groupId);
     const msgs = await storage.getPipMessagesByGroup(groupId);
     res.json(msgs);
+  });
+
+  // === PINBOARD ===
+
+  app.get(api.pinboard.list.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    res.json(await storage.getPinboardItems(groupId));
+  });
+
+  app.post(api.pinboard.add.path, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { title, emoji, category, addedByName } = req.body;
+    const item = await storage.addPinboardItem(groupId, title, emoji, category, addedByName);
+    res.status(201).json(item);
+  });
+
+  app.delete(api.pinboard.remove.path, async (req, res) => {
+    const itemId = Number(req.params.itemId);
+    await storage.removePinboardItem(itemId);
+    res.json({ success: true });
   });
 
   // === PRESENCE ===
@@ -393,11 +485,14 @@ export async function registerRoutes(
     if (!group) return res.status(404).json({ message: "Group not found" });
 
     const online = getOnlinePresence(groupId);
-    res.json(online.map(e => ({
-      participantId: e.participantId,
-      name: e.name,
-      isTyping: e.isTyping,
-    })));
+    res.json({
+      participants: online.map(e => ({
+        participantId: e.participantId,
+        name: e.name,
+        isTyping: e.isTyping,
+      })),
+      pipIsThinking: isPipThinking(groupId),
+    });
   });
 
   // POST /api/groups/:groupId/presence — heartbeat + typing update
@@ -439,10 +534,307 @@ export async function registerRoutes(
 }
 
 // ============================================================
+//  PIP DIRECT RESPONSE (@pip mention)
+// ============================================================
+
+async function respondToPipMention(groupId: number, question: string): Promise<void> {
+  const [msgs, plan, alts, participants, signals, pipMsgs] = await Promise.all([
+    storage.getMessagesByGroup(groupId),
+    storage.getTripPlanByGroup(groupId),
+    storage.getTripAlternativesByGroup(groupId),
+    storage.getParticipantsByGroup(groupId),
+    storage.getSupportSignalsByGroup(groupId),
+    storage.getPipMessagesByGroup(groupId),
+  ]);
+
+  // Detect "lock the trip" intent — broad matching, fires before flight/lodging check
+  const lockPhrases = [
+    /\block\s*(this\s*)?(trip|it|us|everything)\b/i,
+    /\block\s*(it|us|this|the\s+trip)\s*in\b/i,
+    /\block\s*(it\s+)?down\b/i,
+    /\bwe('re| are)\s+(locked|set|doing\s+this|going\s+with|booked|all\s+in|done)\b/i,
+    /\b(it'?s?(\s+all)?)\s+(happening|confirmed|official|a\s+go|locked\s+in)\b/i,
+    /\bdone\s+deal\b/i,
+    /\bwe\s+did\s+it\b/i,
+    /\bwe('?re?)?\s+going\b/i,
+    /\bbook\s+it\b/i,
+    /\blet'?s?\s+(do\s+)?this\b/i,
+    /\bwe'?re?\s+set\b/i,
+    /\b(finalize|finalise)\s+(the\s+)?trip\b/i,
+    /\bit'?s?\s+official\b/i,
+    /\bwe'?re?\s+all\s+in\b/i,
+  ];
+  const flightLodgingPattern = /\b(flight|hotel|airbnb|vrbo|lodging|accommodation|booking)\b/i;
+  const isTripLockIntent = lockPhrases.some(p => p.test(question)) && !flightLodgingPattern.test(question);
+  if (isTripLockIntent) {
+    const existingPlan = await storage.getTripPlanByGroup(groupId);
+    if (existingPlan?.status === "Trip locked") {
+      await postPipMessage(groupId, "The trip is already locked! 🔒 If you need to make changes, use the unlock button in the trip panel.");
+    } else {
+      const dest = existingPlan?.destination ?? "";
+      const destLabel = dest ? ` to ${dest}` : "";
+      await storage.upsertTripPlan(groupId, { confidenceScore: 100, status: "Trip locked" });
+      await postPipMessage(groupId, `🔒 The trip${destLabel} is officially locked! Congrats everyone — time to get packing! Share the trip summary to let everyone know the final plan.`);
+      generateActivitySuggestions(groupId, dest).catch(err => console.error("Activity gen failed:", err));
+    }
+    return;
+  }
+
+  // Detect finalize intent before going to the LLM
+  const finalizePattern = /\b(finalize|finalise|lock\s*(in|it|this)|book\s*(it|this)|confirm(ed)?|go\s*with\s*this|this\s*one|done deal)\b/i;
+  const flightPattern = /\bflight(s)?\b/i;
+  const lodgingPattern = /\b(hotel|airbnb|vrbo|lodging|accommodation|place(s)?\s*to\s*stay|stay(ing)?)\b/i;
+
+  if (finalizePattern.test(question)) {
+    const isFlightFinalize = flightPattern.test(question) || (!lodgingPattern.test(question));
+    const isLodgingFinalize = lodgingPattern.test(question);
+
+    // Extract any URL included in the message
+    const urlMatch = question.match(/https?:\/\/[^\s]+/);
+    const providedUrl = urlMatch ? urlMatch[0] : null;
+
+    if (isFlightFinalize && !plan?.flightsBooked) {
+      if (providedUrl) {
+        await storage.upsertTripPlan(groupId, { flightsBooked: true, finalizedFlightUrl: providedUrl } as any);
+        await postPipMessage(groupId, `Flights finalized! ✈️ I've saved the link for everyone — tap "Flights" in the trip panel to access it.`);
+      } else {
+        const airlineMatch = question.match(/\b(united|delta|american|southwest|jetblue|alaska|spirit|frontier|allegiant|air canada|british airways|lufthansa|air france)\b/i);
+        const airlineName = airlineMatch ? airlineMatch[1] : null;
+        const flightRef = airlineName ? `the ${airlineName} flight` : "your flight";
+        pendingFinalizationStore.set(groupId, 'flights');
+        await postPipMessage(groupId, `Got it! To finalize ${flightRef}, drop the booking link here and I'll save it for everyone. ✈️`);
+      }
+      return;
+    }
+    if (isLodgingFinalize && !(plan as any)?.lodgingBooked) {
+      if (providedUrl) {
+        await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: providedUrl } as any);
+        await postPipMessage(groupId, `Lodging finalized! 🏠 I've saved the booking link — it's in the trip panel for everyone.`);
+      } else {
+        pendingFinalizationStore.set(groupId, 'lodging');
+        await postPipMessage(groupId, `Got it! Drop the booking confirmation link here and I'll save it for everyone. 🏠`);
+      }
+      return;
+    }
+  }
+
+  // Build interleaved conversation history (user + Pip) sorted by timestamp, last 10 turns
+  const userTurns = msgs.map(m => ({
+    at: new Date(m.createdAt ?? 0).getTime(),
+    role: "user" as const,
+    content: `${m.participantName}: ${m.content}`,
+  }));
+  const pipTurns = pipMsgs
+    .filter(m => !m.content.startsWith("FLIGHT_REC:") && !m.content.startsWith("LODGING_REC:"))
+    .map(m => ({
+      at: new Date(m.createdAt ?? 0).getTime(),
+      role: "assistant" as const,
+      content: m.content,
+    }));
+  const conversationHistory = [...userTurns, ...pipTurns]
+    .sort((a, b) => a.at - b.at)
+    .slice(-10)
+    .map(({ role, content }) => ({ role, content }));
+
+  const availabilityLines = signals.length > 0
+    ? signals.map(s => {
+        const person = participants.find(p => p.id === s.participantId)?.name ?? `participant ${s.participantId}`;
+        const target = s.alternativeId
+          ? (alts.find(a => a.id === s.alternativeId)?.destination ?? "an alternative")
+          : "the main plan";
+        return `${person}: ${s.commitmentLevel} → ${target}`;
+      }).join("\n")
+    : "No explicit availability signals yet.";
+
+  const tripContext = [
+    plan?.destination && `Destination: ${plan.destination}`,
+    plan?.startDate && plan?.endDate && `Dates: ${plan.startDate} – ${plan.endDate}`,
+    plan?.budgetBand && `Budget: ${plan.budgetBand}`,
+    alts.length > 0 && `Alternatives: ${alts.map(a => `${a.destination} (${a.dateRange ?? "dates TBD"})`).join(", ")}`,
+    `Group members: ${participants.map(p => p.name).join(", ")}`,
+    `Availability signals:\n${availabilityLines}`,
+  ].filter(Boolean).join("\n");
+
+  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+  const systemPrompt = `You are Pip, a friendly AI travel planning assistant in a group chat. A user has directly asked you a question with @pip.
+Today is ${today}.
+
+Trip context:
+${tripContext}
+
+SCHEDULING RULES — apply these exactly when answering date/scheduling questions:
+- "Weekend trip" means departing Friday, returning Sunday or Monday. NEVER suggest starting on a Saturday or Sunday.
+- "A weekend" = Friday–Sunday (3 nights). "Long weekend" = Friday–Monday. Always name the specific Friday start date.
+- To find the right weekend: (1) List each person's stated unavailability from the conversation history. (2) List candidate Fridays. (3) Pick the first Friday where everyone is free.
+- When the user pushes back on a suggested date, pick a DIFFERENT date — do not repeat the same one.
+- Always verify the day-of-week using today's date as a reference (e.g. if today is ${today}, count forward to find which dates fall on Fridays).
+- Name exact dates (e.g. "May 23–25" not "the last weekend of May"). Do not include URLs.
+
+The conversation history below shows what everyone said and what you (Pip) previously replied. Use it to give specific, contextual answers — reference people by name, acknowledge what you said before, and don't repeat suggestions you already made.
+
+Answer the user's question directly in 1-3 sentences. Be warm and specific.`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...conversationHistory,
+        { role: "user", content: question },
+      ],
+      max_tokens: 300,
+      temperature: 0.5,
+    });
+    const answer = response.choices[0]?.message?.content?.trim();
+    if (answer) {
+      await postPipMessage(groupId, answer);
+      // Re-sync trip plan so dates/details Pip just mentioned are reflected immediately
+      analyzeTripChat(groupId, true).catch(err => console.error("Post-pip sync failed:", err));
+    }
+  } catch (err) {
+    console.error("Pip mention response failed:", err);
+  }
+}
+
+// ============================================================
+//  ACTIVITY SUGGESTIONS (fires on trip lock)
+// ============================================================
+
+async function generateActivitySuggestions(groupId: number, destination: string): Promise<void> {
+  if (!destination) return;
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `You are a travel expert. Return ONLY a valid JSON array of exactly 8 activity suggestions for a trip to ${destination}. Each item: {"emoji":"<single emoji>","title":"<short activity name, max 5 words>","category":"food|outdoor|nightlife|culture|adventure|relaxation"}. No markdown, no explanation.`,
+        },
+        { role: "user", content: `Give me 8 varied activities for ${destination}` },
+      ],
+      max_tokens: 400,
+      temperature: 0.8,
+    });
+    const raw = response.choices[0]?.message?.content?.trim() ?? "[]";
+    const items = JSON.parse(raw.replace(/^```json\n?|```$/g, ""));
+    if (Array.isArray(items) && items.length > 0) {
+      await postPipMessage(groupId, `ACTIVITY_REC:${JSON.stringify({ destination, items })}`);
+    }
+  } catch (err) {
+    console.error("Activity suggestion failed:", err);
+  }
+}
+
+
+async function handlePendingFinalization(groupId: number, type: 'flights' | 'lodging', url: string): Promise<void> {
+  if (type === 'flights') {
+    await storage.upsertTripPlan(groupId, { flightsBooked: true, finalizedFlightUrl: url } as any);
+    await postPipMessage(groupId, `Flights finalized! ✈️ I've saved the link for everyone — tap "Flights" in the trip panel to access it.`);
+  } else {
+    await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: url } as any);
+    await postPipMessage(groupId, `Lodging finalized! 🏠 I've saved the booking link — it's in the trip panel for everyone.`);
+  }
+}
+
+// Wrapper so every pip post auto-clears the thinking indicator
+async function postPipMessage(groupId: number, content: string) {
+  await storage.createPipMessage(groupId, content);
+  clearPipThinking(groupId);
+}
+
+// ============================================================
+//  SERVER-SIDE URL BUILDER (avoids AI hallucinating wrong years)
+// ============================================================
+
+function parseDateToISO(dateStr: string): string | null {
+  if (!dateStr) return null;
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  const now = new Date();
+  // Try "May 24" or "May 24, 2025"
+  let parsed = new Date(`${dateStr} ${now.getFullYear()}`);
+  if (isNaN(parsed.getTime())) return null;
+  // If the parsed date is more than 2 weeks in the past, bump to next year
+  if (parsed.getTime() < now.getTime() - 14 * 24 * 60 * 60 * 1000) {
+    parsed = new Date(`${dateStr} ${now.getFullYear() + 1}`);
+  }
+  if (isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().split("T")[0];
+}
+
+const IATA: Record<string, string> = {
+  "new york": "JFK", "nyc": "JFK", "los angeles": "LAX", "la": "LAX",
+  "chicago": "ORD", "san francisco": "SFO", "sf": "SFO", "seattle": "SEA",
+  "miami": "MIA", "dallas": "DFW", "houston": "IAH", "boston": "BOS",
+  "atlanta": "ATL", "denver": "DEN", "las vegas": "LAS", "phoenix": "PHX",
+  "washington": "IAD", "dc": "IAD", "minneapolis": "MSP", "detroit": "DTW",
+  "san diego": "SAN", "portland": "PDX", "charlotte": "CLT", "orlando": "MCO",
+  "austin": "AUS", "nashville": "BNA", "new orleans": "MSY", "salt lake city": "SLC",
+  "toronto": "YYZ", "montreal": "YUL", "london": "LHR", "paris": "CDG",
+  "tokyo": "NRT", "dubai": "DXB", "cancun": "CUN", "mexico city": "MEX",
+};
+
+function cityToIATA(city: string): string {
+  return IATA[city.toLowerCase()] ?? city.toUpperCase().slice(0, 3);
+}
+
+interface TripUrls {
+  flightSearchUrl: string | null;
+  kayakUrl: string | null;
+  airbnbUrl: string | null;
+  hotelsUrl: string | null;
+}
+
+function buildTripUrls(
+  destination: string | null,
+  startDate: string | null,
+  endDate: string | null,
+  originCity: string | null,
+  guestCount: number,
+  includeLodging: boolean,
+): TripUrls {
+  if (!destination || !startDate || !endDate) {
+    return { flightSearchUrl: null, kayakUrl: null, airbnbUrl: null, hotelsUrl: null };
+  }
+
+  const startISO = parseDateToISO(startDate);
+  const endISO = parseDateToISO(endDate);
+  if (!startISO || !endISO) {
+    return { flightSearchUrl: null, kayakUrl: null, airbnbUrl: null, hotelsUrl: null };
+  }
+
+  const destEnc = encodeURIComponent(destination);
+  const destPlus = destination.replace(/\s+/g, "+");
+  const guests = Math.max(1, guestCount);
+
+  // Google Flights
+  const flightSearchUrl = originCity
+    ? `https://www.google.com/travel/flights?q=flights+from+${originCity.replace(/\s+/g, "+")}+to+${destPlus}+${startDate.replace(/\s+/g, "+")}+to+${endDate.replace(/\s+/g, "+")}`
+    : `https://www.google.com/travel/flights?q=flights+to+${destPlus}+${startDate.replace(/\s+/g, "+")}+to+${endDate.replace(/\s+/g, "+")}`;
+
+  // Kayak
+  const destIATA = cityToIATA(destination);
+  const kayakUrl = originCity
+    ? `https://www.kayak.com/flights/${cityToIATA(originCity)}-${destIATA}/${startISO}/${endISO}`
+    : `https://www.kayak.com/flights/anywhere/${destEnc}/${startISO}/${endISO}`;
+
+  // Lodging
+  const airbnbUrl = includeLodging
+    ? `https://www.airbnb.com/s/${destEnc}/homes?checkin=${startISO}&checkout=${endISO}&adults=${guests}`
+    : null;
+  const hotelsUrl = includeLodging
+    ? `https://www.booking.com/searchresults.html?ss=${destEnc}&checkin=${startISO}&checkout=${endISO}&group_adults=${guests}`
+    : null;
+
+  return { flightSearchUrl, kayakUrl, airbnbUrl, hotelsUrl };
+}
+
+// ============================================================
 //  TRAVEL AI PIPELINE
 // ============================================================
 
-async function analyzeTripChat(groupId: number): Promise<void> {
+async function analyzeTripChat(groupId: number, bypassCooldown = false): Promise<void> {
   // Capture state BEFORE AI analysis for material-change comparison
   const [previousPlan, previousAlts, previousPipMsgs] = await Promise.all([
     storage.getTripPlanByGroup(groupId),
@@ -453,12 +845,30 @@ async function analyzeTripChat(groupId: number): Promise<void> {
   const msgs = await storage.getMessagesByGroup(groupId);
   if (msgs.length === 0) return;
 
+  // Cooldown check (skipped when bypassCooldown=true, e.g. after @pip response)
+  const cooldown = analysisCooldowns.get(groupId);
+  const now = Date.now();
+  if (!bypassCooldown && cooldown) {
+    const elapsed = now - cooldown.lastRunAt;
+    if (elapsed < COOLDOWN_MIN_MS) return;
+  }
+  analysisCooldowns.set(groupId, { lastMessageCount: msgs.length, lastRunAt: now });
+
   const participantsList = await storage.getParticipantsByGroup(groupId);
   const participantNames = participantsList.map(p => p.name);
 
-  const chatLog = msgs
-    .slice(-60)
-    .map(m => `${m.participantName}: ${m.content}`)
+  // Include recent pip messages interleavd so the extractor sees Pip's own recommendations
+  const pipMsgs = await storage.getPipMessagesByGroup(groupId);
+  const allMessages = [
+    ...msgs.map(m => ({ createdAt: m.createdAt, line: `${m.participantName}: ${m.content}` })),
+    ...pipMsgs
+      .filter(p => !p.content.startsWith("FLIGHT_REC:") && !p.content.startsWith("LODGING_REC:"))
+      .map(p => ({ createdAt: p.createdAt, line: `Pip: ${p.content}` })),
+  ].sort((a, b) => (a.createdAt ? new Date(a.createdAt).getTime() : 0) - (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+
+  const chatLog = allMessages
+    .slice(-30)
+    .map(m => m.line)
     .join("\n");
 
   const systemPrompt = `You are Pip, an AI travel planning assistant embedded in a group chat.
@@ -474,8 +884,10 @@ Return ONLY a valid JSON object with this exact structure:
     "endDate": "end date string like 'May 27' or null",
     "budgetBand": "one of: Budget-friendly / Moderate / Splurge / null",
     "lodgingPreference": "Airbnb / Hotel / Hostel / Camping / null",
-    "flightsBooked": false,
-    "flightSearchUrl": null,
+    "originCity": null,
+    "flightsMentioned": false,
+    "lodgingMentioned": false,
+    "guestCount": null,
     "likelyAttendeeNames": ["names of people likely attending main plan"],
     "committedAttendeeNames": ["names of people committed to main plan"],
     "unresolvedQuestions": ["short descriptions of unresolved questions, 1 per item"]
@@ -501,6 +913,7 @@ Return ONLY a valid JSON object with this exact structure:
       "targetOption": "main or the destination of the alternative"
     }
   ],
+  "conflictDetected": false,
   "shouldPipSpeak": false,
   "pipMessage": null
 }
@@ -509,18 +922,25 @@ RULES:
 1. confidenceScore 0-100: base on destination consensus strength, date agreement, attendance clarity, conflict count.
 2. Only create alternatives that have real chat evidence. Do NOT hallucinate. Each alternative must differ from main plan in destination or dates.
 3. attendanceSignals — use exact member names from the list provided. "committed" = "book me in", "I'm in", "definitely"; "likely" = "planning to", "should be able to"; "interested" = "down for", "sounds fun", "maybe"; "unavailable" = "can't make it", "working that day", "won't be there".
-4. shouldPipSpeak = true ONLY when: a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck, or one clarifying question would unblock everything. NOT after every message.
-5. pipMessage: warm, concise, max 2 sentences. null if shouldPipSpeak is false.
+4. conflictDetected: set true if ANY message in the chat proposes dates/months that ANOTHER participant has explicitly said they cannot do. This overrides all other conditions — if conflictDetected=true you MUST set shouldPipSpeak=true. Examples: someone says "I'm busy in June" and later anyone suggests June dates; someone says "I can't do July" and then July is proposed. Scan ALL messages — the unavailability and the conflict proposal do not have to be adjacent.
+5. shouldPipSpeak = true when ANY of these apply: conflictDetected=true, a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck (same topic debated 4+ times with no progress), one clarifying question would unblock everything, all three key details are known for the first time. NOT after routine messages where nothing important changed.
+5b. pipMessage: warm but direct, max 2 sentences. For conflicts, ALWAYS name the person and the month/date explicitly (e.g. "Heads up — Akshay said he's busy in June, so those dates won't work for him. Want to look at a different month?"). For stalemates, be proactive: "You've been going back and forth on [topic] — want me to suggest [specific resolution]?" null if shouldPipSpeak is false.
 6. unresolvedQuestions: list only genuinely open questions (budget disagreements, unconfirmed dates, missing attendee commitment, etc.).
 7. If fewer than 3 messages or no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.
-8. FLIGHTS — flightsBooked: set true if chat contains explicit confirmation that flights are booked (e.g. "I booked my flights", "got my ticket", "flights are sorted", "just booked"). Otherwise false.
-9. FLIGHTS — flightSearchUrl: ONLY set this when destination AND both startDate AND endDate are known. Use format: https://www.google.com/travel/flights?q=flights+to+DESTINATION+STARTDATE+to+ENDDATE (URL-encode spaces as +). Set to null if destination or either date is missing.
-10. FLIGHTS — flightPipMessage: write a helpful 2-3 sentence flight recommendation message as Pip WHENEVER destination AND both startDate AND endDate are all known (the backend handles deduplication so you don't need to worry about posting it multiple times). Include: typical roundtrip price range based on your knowledge, whether flights are typically direct or connecting, estimated flight time, and two search links formatted as markdown: [Search Google Flights](URL) and [Check Kayak](KAYAK_URL). For Kayak URL use format: https://www.kayak.com/flights/anywhere/CITY/STARTDATE_ISO/ENDDATE_ISO where CITY is the destination city name and dates are YYYY-MM-DD. Set flightPipMessage to null only if destination or either date is missing.`;
+8. flightsBooked and lodgingBooked are NEVER set by AI — only via explicit @pip finalize. Do not include these fields.
+8b. originCity: extract city the group flies FROM if mentioned (e.g. "flying out of NYC", "leaving from Chicago"). Use city name only. Null if not mentioned.
+9. flightPipMessage: write a helpful 2-3 sentence plain-text flight summary WHENEVER destination AND both dates are known. Include typical roundtrip price range, direct vs connecting, and flight time. No URLs or markdown. Null if dest or dates missing.
+10. ORIGIN PROMPT — if destination AND startDate AND endDate known but originCity is null: set shouldPipSpeak=true, pipMessage="Dates are looking good! Quick question — where is everyone flying from? That'll help me find the best flights."
+11. flightsMentioned: true if anyone in the chat mentions flights, flying, plane, airport, booking flights, or asks about flying to the destination. Otherwise false.
+11b. lodgingMentioned: true if anyone mentions hotels, Airbnb, VRBO, places to stay, accommodation, lodging, where to stay, or bnb. Otherwise false.
+12. guestCount: extract the number of people attending if known or estimable from likelyAttendeeNames/committedAttendeeNames. Set to the count of attendees if known, null if unclear.
+13. GUEST PROMPT — if lodgingMentioned is true but guestCount is null: include in pipMessage "How many people are coming? I'll use that to show the right-sized places to stay."
+14. LODGING PIP — if lodgingMentioned becomes true and destination AND dates are known: set shouldPipSpeak=true, pipMessage="I found some great places to stay in [destination]! Check the trip panel for Airbnb and Booking.com links."`;
 
   let extracted: AiTripExtraction;
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Chat log:\n${chatLog}` },
@@ -536,15 +956,14 @@ RULES:
     return;
   }
 
-  const { mainPlan, confidenceScore, flightPipMessage, alternatives, attendanceSignals, shouldPipSpeak, pipMessage } = extracted;
+  const { mainPlan, confidenceScore, conflictDetected, flightPipMessage, alternatives, attendanceSignals, shouldPipSpeak, pipMessage } = extracted;
 
-  // Boost confidence when flights are booked — real commitment signal
-  const boostedConfidenceScore = mainPlan.flightsBooked
-    ? Math.min(100, confidenceScore + 15)
-    : confidenceScore;
+  const boostedConfidenceScore = confidenceScore;
 
-  // Compute status using enriched signals
-  const status = computeTripStatus({
+  // Compute status — never overwrite a manually-locked trip
+  const existingPlan = await storage.getTripPlanByGroup(groupId);
+  const alreadyLocked = existingPlan?.status === "Trip locked";
+  const status = alreadyLocked ? "Trip locked" : computeTripStatus({
     confidenceScore: boostedConfidenceScore,
     messageCount: msgs.length,
     destination: mainPlan.destination,
@@ -555,15 +974,30 @@ RULES:
     totalParticipants: participantNames.length,
   });
 
-  // Upsert main trip plan
+  // Build URLs server-side with correct current year and guest count
+  const guestCount = mainPlan.guestCount
+    ?? Math.max(mainPlan.committedAttendeeNames.length, mainPlan.likelyAttendeeNames.length);
+  const builtUrls = buildTripUrls(
+    mainPlan.destination,
+    mainPlan.startDate,
+    mainPlan.endDate,
+    mainPlan.originCity,
+    guestCount,
+    mainPlan.lodgingMentioned,
+  );
+
+  // Upsert main trip plan — never overwrite flightsBooked/lodgingBooked (set only via @pip finalize)
   await storage.upsertTripPlan(groupId, {
     destination: mainPlan.destination,
     startDate: mainPlan.startDate,
     endDate: mainPlan.endDate,
     budgetBand: mainPlan.budgetBand,
     lodgingPreference: mainPlan.lodgingPreference,
-    flightsBooked: mainPlan.flightsBooked,
-    flightSearchUrl: mainPlan.flightSearchUrl,
+    flightSearchUrl: builtUrls.flightSearchUrl,
+    kayakUrl: builtUrls.kayakUrl,
+    ...(mainPlan.originCity ? { originCity: mainPlan.originCity } : {}),
+    ...(builtUrls.airbnbUrl ? { airbnbUrl: builtUrls.airbnbUrl } : {}),
+    ...(builtUrls.hotelsUrl ? { hotelsUrl: builtUrls.hotelsUrl } : {}),
     confidenceScore: Math.max(0, Math.min(100, boostedConfidenceScore)),
     status,
     likelyAttendeeNames: mainPlan.likelyAttendeeNames,
@@ -714,33 +1148,68 @@ RULES:
     // A low-confidence group that hasn't gotten clarity yet benefits from a clarifying question
     const hasLowConfidenceWithChat = (newPlan?.confidenceScore ?? 0) < 30 && msgs.length >= 4;
 
-    // Post when AI recommends AND cooldown met AND one backend condition is true
-    const shouldPost = shouldPipSpeak && minutesSinceLastPip >= 3
-      && (materialChange || groupStuck || hasLowConfidenceWithChat);
+    // Conflicts bypass backend gating — post immediately (1 min cooldown only)
+    const isConflictAlert = conflictDetected && shouldPipSpeak;
+    const shouldPost = shouldPipSpeak && (
+      (isConflictAlert && minutesSinceLastPip >= 1) ||
+      (minutesSinceLastPip >= 3 && (materialChange || groupStuck || hasLowConfidenceWithChat))
+    );
 
     if (shouldPost) {
-      await storage.createPipMessage(groupId, pipMessage);
+      await postPipMessage(groupId, pipMessage);
     }
   }
 
-  // Flight Pip message: post once per unique destination+startDate+endDate pair,
-  // respecting the same anti-spam cooldown as regular Pip messages (≥ 3 min).
-  if (flightPipMessage && mainPlan.destination && mainPlan.startDate && mainPlan.endDate) {
-    const currentFlightKey = `${mainPlan.destination}|${mainPlan.startDate}|${mainPlan.endDate}`;
+  // Flight pip message — fires when flights are mentioned OR whenever destination+dates are all known.
+  // Uses its own dedup key so it's independent of the regular pip cooldown.
+  const hasFullFlightInfo = !!(mainPlan.destination && mainPlan.startDate && mainPlan.endDate);
+  const shouldCheckFlight = mainPlan.flightsMentioned || hasFullFlightInfo;
+
+  if (shouldCheckFlight) {
+    const currentFlightKey = hasFullFlightInfo
+      ? `${mainPlan.destination}|${mainPlan.originCity ?? "any"}|${mainPlan.startDate}|${mainPlan.endDate}`
+      : `mention|${groupId}`;
     const latestPlan = await storage.getTripPlanByGroup(groupId);
-    const alreadyPostedForThisPair = latestPlan?.lastFlightRecoKey === currentFlightKey;
+    const alreadyPostedFlight = latestPlan?.lastFlightRecoKey === currentFlightKey;
 
-    if (!alreadyPostedForThisPair) {
-      // Use the same cooldown signal as regular Pip messages
-      const lastPipForFlight = await storage.getLastPipMessage(groupId);
-      const nowMs = Date.now();
-      const lastPipTime = lastPipForFlight?.createdAt ? new Date(lastPipForFlight.createdAt).getTime() : 0;
-      const minutesSinceLastPip = (nowMs - lastPipTime) / (1000 * 60);
-
-      if (minutesSinceLastPip >= 3) {
-        await storage.createPipMessage(groupId, flightPipMessage);
-        await storage.upsertTripPlan(groupId, { lastFlightRecoKey: currentFlightKey });
+    if (!alreadyPostedFlight) {
+      if (hasFullFlightInfo && flightPipMessage) {
+        const flightPayload = `FLIGHT_REC:${JSON.stringify({
+          text: flightPipMessage,
+          googleUrl: builtUrls.flightSearchUrl,
+          kayakUrl: builtUrls.kayakUrl,
+        })}`;
+        await postPipMessage(groupId, flightPayload);
+      } else if (!hasFullFlightInfo && mainPlan.flightsMentioned) {
+        const dest = mainPlan.destination ? ` to ${mainPlan.destination}` : "";
+        await postPipMessage(groupId, `On it! I'll pull up flights${dest} as soon as we lock in the dates. ✈️`);
       }
+      await storage.upsertTripPlan(groupId, { lastFlightRecoKey: currentFlightKey });
+    }
+  }
+
+  // Lodging pip message — fires on first mention of lodging, regardless of whether dates are set.
+  if (mainPlan.lodgingMentioned) {
+    const hasFullInfo = !!(mainPlan.destination && mainPlan.startDate && mainPlan.endDate && (builtUrls.airbnbUrl || builtUrls.hotelsUrl));
+    const currentLodgingKey = hasFullInfo
+      ? `${mainPlan.destination}|${mainPlan.startDate}|${mainPlan.endDate}`
+      : `mention|${groupId}`;
+    const latestPlan = await storage.getTripPlanByGroup(groupId);
+    const alreadyPostedLodging = (latestPlan as any)?.lastLodgingRecoKey === currentLodgingKey;
+
+    if (!alreadyPostedLodging) {
+      if (hasFullInfo) {
+        const lodgingPayload = `LODGING_REC:${JSON.stringify({
+          destination: mainPlan.destination,
+          airbnbUrl: builtUrls.airbnbUrl,
+          hotelsUrl: builtUrls.hotelsUrl,
+        })}`;
+        await postPipMessage(groupId, lodgingPayload);
+      } else {
+        const dest = mainPlan.destination ? ` in ${mainPlan.destination}` : "";
+        await postPipMessage(groupId, `Love it! I'll share Airbnb and hotel options${dest} once we have the dates. 🏠`);
+      }
+      await storage.upsertTripPlan(groupId, { lastLodgingRecoKey: currentLodgingKey } as any);
     }
   }
 }
@@ -824,16 +1293,7 @@ function computeTripStatus(input: TripStatusInput): string {
     totalParticipants,
   } = input;
 
-  // Trip locked: high confidence, committed attendees, destination set, few conflicts, few open alternatives
-  if (
-    confidenceScore >= 80 &&
-    committedNames.length >= 1 &&
-    destination &&
-    unresolvedCount <= 1 &&
-    alternativeCount <= 1
-  ) {
-    return "Trip locked";
-  }
+  // "Trip locked" is ONLY set via the explicit lock button — never auto-computed here.
 
   // Almost decided: decent confidence, most participants have a stance
   const participantsWithStance = committedNames.length + likelyNames.length;
@@ -887,13 +1347,20 @@ function normalizeAiExtraction(raw: Record<string, unknown>): AiTripExtraction {
       endDate: (mainPlan.endDate as string) ?? null,
       budgetBand: (mainPlan.budgetBand as string) ?? null,
       lodgingPreference: (mainPlan.lodgingPreference as string) ?? null,
-      flightsBooked: mainPlan.flightsBooked === true,
-      flightSearchUrl: (mainPlan.flightSearchUrl as string) ?? null,
+      flightSearchUrl: null, // built server-side
+      kayakUrl: null,        // built server-side
+      originCity: (mainPlan.originCity as string) ?? null,
+      airbnbUrl: null,       // built server-side
+      hotelsUrl: null,       // built server-side
+      flightsMentioned: mainPlan.flightsMentioned === true,
+      lodgingMentioned: mainPlan.lodgingMentioned === true,
+      guestCount: typeof mainPlan.guestCount === "number" ? mainPlan.guestCount : null,
       likelyAttendeeNames: Array.isArray(mainPlan.likelyAttendeeNames) ? mainPlan.likelyAttendeeNames as string[] : [],
       committedAttendeeNames: Array.isArray(mainPlan.committedAttendeeNames) ? mainPlan.committedAttendeeNames as string[] : [],
       unresolvedQuestions: Array.isArray(mainPlan.unresolvedQuestions) ? mainPlan.unresolvedQuestions as string[] : [],
     },
     confidenceScore: typeof raw.confidenceScore === "number" ? raw.confidenceScore : 5,
+    conflictDetected: raw.conflictDetected === true,
     flightPipMessage: (raw.flightPipMessage as string) ?? null,
     alternatives: Array.isArray(raw.alternatives) ? (raw.alternatives as Record<string, unknown>[]).map(a => ({
       destination: (a.destination as string) ?? null,

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, boolean, real } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, boolean, real, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -56,7 +56,15 @@ export const tripPlans = pgTable("trip_plans", {
   lodgingPreference: text("lodging_preference"),
   flightsBooked: boolean("flights_booked").default(false),
   flightSearchUrl: text("flight_search_url"),
+  kayakUrl: text("kayak_url"),
+  originCity: text("origin_city"),
   lastFlightRecoKey: text("last_flight_reco_key"),
+  lodgingBooked: boolean("lodging_booked").default(false),
+  airbnbUrl: text("airbnb_url"),
+  hotelsUrl: text("hotels_url"),
+  lastLodgingRecoKey: text("last_lodging_reco_key"),
+  finalizedFlightUrl: text("finalized_flight_url"),
+  finalizedLodgingUrl: text("finalized_lodging_url"),
   confidenceScore: integer("confidence_score").default(0),
   status: text("status").default("Early ideas"),
   likelyAttendeeNames: text("likely_attendee_names").array(),
@@ -100,6 +108,17 @@ export const pipMessages = pgTable("pip_messages", {
   id: serial("id").primaryKey(),
   groupId: integer("group_id").notNull(),
   content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Pinboard items — activities/ideas added to the locked trip board
+export const pinboardItems = pgTable("pinboard_items", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  title: text("title").notNull(),
+  emoji: text("emoji").notNull().default("📌"),
+  category: text("category").notNull().default("activity"),
+  addedByName: text("added_by_name").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -161,6 +180,7 @@ export type TripPlan = typeof tripPlans.$inferSelect;
 export type TripAlternative = typeof tripAlternatives.$inferSelect;
 export type SupportSignal = typeof supportSignals.$inferSelect;
 export type PipMessage = typeof pipMessages.$inferSelect;
+export type PinboardItem = typeof pinboardItems.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
 export type JoinGroupRequest = { name: string };
@@ -190,13 +210,20 @@ export interface AiTripExtraction {
     endDate: string | null;
     budgetBand: string | null;
     lodgingPreference: string | null;
-    flightsBooked: boolean;
-    flightSearchUrl: string | null;
+    flightSearchUrl: string | null; // populated server-side
+    kayakUrl: string | null;        // populated server-side
+    originCity: string | null;
+    airbnbUrl: string | null;       // populated server-side
+    hotelsUrl: string | null;       // populated server-side
+    flightsMentioned: boolean;
+    lodgingMentioned: boolean;
+    guestCount: number | null;
     likelyAttendeeNames: string[];
     committedAttendeeNames: string[];
     unresolvedQuestions: string[];
   };
   confidenceScore: number;
+  conflictDetected: boolean;
   flightPipMessage: string | null;
   alternatives: AiAlternative[];
   attendanceSignals: AiAttendanceSignal[];

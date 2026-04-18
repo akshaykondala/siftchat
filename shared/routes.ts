@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertGroupSchema, insertParticipantSchema, insertMessageSchema, groups, participants, messages, plans, tripPlans, tripAlternatives, pipMessages } from './schema';
+import { insertGroupSchema, insertParticipantSchema, insertMessageSchema, groups, participants, messages, plans, tripPlans, tripAlternatives, pipMessages, pinboardItems } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -162,6 +162,15 @@ export const api = {
         404: errorSchemas.notFound,
       },
     },
+    unlock: {
+      method: 'POST' as const,
+      path: '/api/groups/:groupId/trip/unlock',
+      input: z.object({}),
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        404: errorSchemas.notFound,
+      },
+    },
   },
   pipMessages: {
     list: {
@@ -170,6 +179,24 @@ export const api = {
       responses: {
         200: z.array(z.custom<typeof pipMessages.$inferSelect>()),
       },
+    },
+  },
+  pinboard: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/groups/:groupId/pinboard',
+      responses: { 200: z.array(z.custom<typeof pinboardItems.$inferSelect>()) },
+    },
+    add: {
+      method: 'POST' as const,
+      path: '/api/groups/:groupId/pinboard',
+      input: z.object({ title: z.string(), emoji: z.string(), category: z.string(), addedByName: z.string() }),
+      responses: { 201: z.custom<typeof pinboardItems.$inferSelect>() },
+    },
+    remove: {
+      method: 'DELETE' as const,
+      path: '/api/groups/:groupId/pinboard/:itemId',
+      responses: { 200: z.object({ success: z.boolean() }) },
     },
   },
 };

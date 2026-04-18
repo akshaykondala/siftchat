@@ -7,6 +7,11 @@ export interface PresenceUser {
   isTyping: boolean;
 }
 
+interface PresenceResponse {
+  participants: PresenceUser[];
+  pipIsThinking: boolean;
+}
+
 const HEARTBEAT_INTERVAL_MS = 8_000;   // send keepalive every 8s regardless of state
 const TYPING_REFRESH_MS = 2_000;       // re-send isTyping=true every 2s while composing
 const POLL_INTERVAL_MS = 2_000;        // poll for others' presence every 2s
@@ -93,18 +98,19 @@ export function usePresence(
   }, [isTyping, participantId, groupId, sendPresence]);
 
   // ── Poll for others' presence ────────────────────────────────────────────────
-  const query = useQuery<PresenceUser[]>({
+  const query = useQuery<PresenceResponse>({
     queryKey: ["/api/groups/presence", groupId],
     queryFn: async () => {
       const res = await fetch(`/api/groups/${groupId}/presence`);
-      if (!res.ok) return [];
+      if (!res.ok) return { participants: [], pipIsThinking: false };
       return res.json();
     },
     enabled: !!groupId && !!participantId,
     refetchInterval: POLL_INTERVAL_MS,
   });
 
-  const onlineUsers = query.data ?? [];
+  const onlineUsers = query.data?.participants ?? [];
+  const pipIsThinking = query.data?.pipIsThinking ?? false;
 
   // Exclude ourselves from the lists shown to the user
   const otherOnline = onlineUsers.filter((u) => u.participantId !== participantId);
@@ -114,5 +120,6 @@ export function usePresence(
     onlineUsers,
     otherOnline,
     typingUsers,
+    pipIsThinking,
   };
 }

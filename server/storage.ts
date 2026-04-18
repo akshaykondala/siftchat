@@ -1,9 +1,9 @@
 import { db } from "./db";
 import {
   groups, participants, messages, plans, planVotes,
-  tripPlans, tripAlternatives, supportSignals, pipMessages,
+  tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems,
   type Group, type Participant, type Message, type Plan, type PlanVote,
-  type TripPlan, type TripAlternative, type SupportSignal, type PipMessage,
+  type TripPlan, type TripAlternative, type SupportSignal, type PipMessage, type PinboardItem,
   type CommitmentLevel,
 } from "@shared/schema";
 import { eq, desc, and, isNull } from "drizzle-orm";
@@ -56,6 +56,11 @@ export interface IStorage {
   getPipMessagesByGroup(groupId: number): Promise<PipMessage[]>;
   createPipMessage(groupId: number, content: string): Promise<PipMessage>;
   getLastPipMessage(groupId: number): Promise<PipMessage | undefined>;
+
+  // Pinboard
+  getPinboardItems(groupId: number): Promise<PinboardItem[]>;
+  addPinboardItem(groupId: number, title: string, emoji: string, category: string, addedByName: string): Promise<PinboardItem>;
+  removePinboardItem(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -322,6 +327,21 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(pipMessages.createdAt))
       .limit(1);
     return msg;
+  }
+
+  // === PINBOARD METHODS ===
+
+  async getPinboardItems(groupId: number): Promise<PinboardItem[]> {
+    return db.select().from(pinboardItems).where(eq(pinboardItems.groupId, groupId)).orderBy(pinboardItems.createdAt);
+  }
+
+  async addPinboardItem(groupId: number, title: string, emoji: string, category: string, addedByName: string): Promise<PinboardItem> {
+    const [item] = await db.insert(pinboardItems).values({ groupId, title, emoji, category, addedByName }).returning();
+    return item;
+  }
+
+  async removePinboardItem(id: number): Promise<void> {
+    await db.delete(pinboardItems).where(eq(pinboardItems.id, id));
   }
 }
 

@@ -1,14 +1,25 @@
-import { pgTable, text, serial, integer, timestamp, boolean, real, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, boolean, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
 
 // === TABLE DEFINITIONS ===
 
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash"),   // null for Google-only accounts
+  name: text("name").notNull(),
+  googleId: text("google_id").unique(),  // Google OAuth sub
+  avatarUrl: text("avatar_url"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const groups = pgTable("groups", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   shareLinkSlug: text("share_link_slug").notNull().unique(),
+  createdByUserId: integer("created_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -16,6 +27,7 @@ export const participants = pgTable("participants", {
   id: serial("id").primaryKey(),
   groupId: integer("group_id").notNull(),
   name: text("name").notNull(),
+  userId: integer("user_id"),
   joinedAt: timestamp("joined_at").defaultNow(),
 });
 
@@ -176,6 +188,7 @@ export type Participant = typeof participants.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Plan = typeof plans.$inferSelect;
 export type PlanVote = typeof planVotes.$inferSelect;
+export type User = typeof users.$inferSelect;
 export type TripPlan = typeof tripPlans.$inferSelect;
 export type TripAlternative = typeof tripAlternatives.$inferSelect;
 export type SupportSignal = typeof supportSignals.$inferSelect;

@@ -5,6 +5,10 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { openai } from "./replit_integrations/audio/client";
 import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
+import { signup, login, loginWithGoogle, signToken, getUserById, authMiddleware, checkRateLimit, resetRateLimit, validateSignupInput, GOOGLE_CLIENT_ID } from "./auth";
+import { db } from "./db";
+import { participants, groups, tripPlans } from "@shared/schema";
+import { eq, inArray } from "drizzle-orm";
 
 // ============================================================
 //  AI ANALYSIS COOLDOWN
@@ -105,7 +109,16 @@ export async function registerRoutes(
   app.post(api.groups.create.path, async (req, res) => {
     try {
       const input = api.groups.create.input.parse(req.body);
-      const group = await storage.createGroup(input.name);
+      // Resolve userId from token if present
+      let createdByUserId: number | undefined;
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) {
+        try {
+          const { verifyToken } = await import("./auth");
+          createdByUserId = verifyToken(authHeader.slice(7)).userId;
+        } catch { /* no-op */ }
+      }
+      const group = await storage.createGroup(input.name, createdByUserId);
       res.status(201).json(group);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -132,6 +145,15 @@ export async function registerRoutes(
     try {
       const input = api.groups.join.input.parse(req.body);
       const participant = await storage.createParticipant(group.id, input.name);
+      // Link to user account if token provided
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) {
+        try {
+          const { verifyToken } = await import("./auth");
+          const { userId } = verifyToken(authHeader.slice(7));
+          await db.update(participants).set({ userId }).where(eq(participants.id, participant.id));
+        } catch { /* no-op if token invalid */ }
+      }
       res.status(201).json(participant);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -530,6 +552,90 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // === AUTH ===
+
+  app.post("/api/auth/signup", async (req, res) => {
+    const ip = req.ip ?? "unknown";
+    if (!checkRateLimit(ip)) return res.status(429).json({ message: "Too many attempts. Please wait 15 minutes." });
+    const { email, password, name } = req.body;
+    const validationError = validateSignupInput(email, password, name);
+    if (validationError) return res.status(400).json({ message: validationError });
+    try {
+      const user = await signup(email, password, name);
+      resetRateLimit(ip);
+      const token = signToken(user.id);
+      res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl } });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    const ip = req.ip ?? "unknown";
+    if (!checkRateLimit(ip)) return res.status(429).json({ message: "Too many attempts. Please wait 15 minutes." });
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: "Email and password required" });
+    try {
+      const user = await login(email, password);
+      resetRateLimit(ip);
+      const token = signToken(user.id);
+      res.json({ token, user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl } });
+    } catch (err: any) {
+      res.status(401).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/auth/google", async (req, res) => {
+    const ip = req.ip ?? "unknown";
+    if (!checkRateLimit(ip)) return res.status(429).json({ message: "Too many attempts. Please wait 15 minutes." });
+    const { idToken } = req.body;
+    if (!idToken) return res.status(400).json({ message: "idToken required" });
+    try {
+      const user = await loginWithGoogle(idToken);
+      resetRateLimit(ip);
+      const token = signToken(user.id);
+      res.json({ token, user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl } });
+    } catch (err: any) {
+      res.status(401).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/auth/config", (_req, res) => {
+    res.json({ googleClientId: GOOGLE_CLIENT_ID ?? null });
+  });
+
+  app.get("/api/auth/me", authMiddleware, async (req, res) => {
+    const user = await getUserById((req as any).userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl });
+  });
+
+  // === MY TRIPS ===
+
+  app.get("/api/users/me/trips", authMiddleware, async (req, res) => {
+    const userId = (req as any).userId;
+    // Find all participant rows for this user
+    const myParticipants = await db.select().from(participants).where(eq(participants.userId, userId));
+    if (myParticipants.length === 0) return res.json([]);
+    const groupIds = Array.from(new Set(myParticipants.map(p => p.groupId)));
+    // Fetch groups + trip plans in parallel
+    const [allGroups, allPlans] = await Promise.all([
+      db.select().from(groups).where(inArray(groups.id, groupIds)),
+      db.select().from(tripPlans).where(inArray(tripPlans.groupId, groupIds)),
+    ]);
+    const planByGroup = Object.fromEntries(allPlans.map(p => [p.groupId, p]));
+    const result = allGroups.map(g => ({
+      ...g,
+      tripPlan: planByGroup[g.id] ?? null,
+    }));
+    // Sort newest first
+    result.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+    res.json(result);
+  });
+
+  // === LINK PARTICIPANT TO USER when joining ===
+  // (handled inline in the join route — patching here via middleware on group join)
+
   return httpServer;
 }
 
@@ -709,11 +815,11 @@ async function generateActivitySuggestions(groupId: number, destination: string)
       messages: [
         {
           role: "system",
-          content: `You are a travel expert. Return ONLY a valid JSON array of exactly 8 activity suggestions for a trip to ${destination}. Each item: {"emoji":"<single emoji>","title":"<short activity name, max 5 words>","category":"food|outdoor|nightlife|culture|adventure|relaxation"}. No markdown, no explanation.`,
+          content: `You are a travel expert. Return ONLY a valid JSON array of exactly 16 activity suggestions for a trip to ${destination}. Each item: {"emoji":"<single emoji>","title":"<short activity name, max 5 words>","category":"food|outdoor|nightlife|culture|adventure|relaxation"}. Vary the categories — no more than 3 of the same category. No markdown, no explanation.`,
         },
-        { role: "user", content: `Give me 8 varied activities for ${destination}` },
+        { role: "user", content: `Give me 16 varied activities for ${destination}` },
       ],
-      max_tokens: 400,
+      max_tokens: 700,
       temperature: 0.8,
     });
     const raw = response.choices[0]?.message?.content?.trim() ?? "[]";

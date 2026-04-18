@@ -11,7 +11,7 @@ import { randomBytes } from "crypto";
 
 export interface IStorage {
   // Groups
-  createGroup(name: string): Promise<Group>;
+  createGroup(name: string, createdByUserId?: number): Promise<Group>;
   getGroupBySlug(slug: string): Promise<Group | undefined>;
   getGroupById(id: number): Promise<Group | undefined>;
 
@@ -64,9 +64,9 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async createGroup(name: string): Promise<Group> {
+  async createGroup(name: string, createdByUserId?: number): Promise<Group> {
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + randomBytes(3).toString('hex');
-    const [group] = await db.insert(groups).values({ name, shareLinkSlug: slug }).returning();
+    const [group] = await db.insert(groups).values({ name, shareLinkSlug: slug, createdByUserId }).returning();
     return group;
   }
 

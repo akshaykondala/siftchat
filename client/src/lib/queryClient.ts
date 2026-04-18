@@ -7,6 +7,11 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+function getAuthHeader(): Record<string, string> {
+  const token = localStorage.getItem("siftchat_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function apiRequest(
   method: string,
   url: string,
@@ -14,8 +19,8 @@ export async function apiRequest(
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
+    headers: { ...getAuthHeader(), ...(data !== undefined ? { "Content-Type": "application/json" } : {}) },
+    body: data !== undefined ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
 

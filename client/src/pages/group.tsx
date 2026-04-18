@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { useRoute } from "wouter";
+import { useRoute, useLocation } from "wouter";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
 import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useLockTrip, useUnlockTrip, usePinboard, useAddPin, useRemovePin } from "@/hooks/use-trip";
@@ -876,8 +876,10 @@ function useCountdown(targetDateStr: string | null | undefined) {
 }
 
 // ─── Locked Trip Panel ─────────────────────────────────────────────────────────
-function LockedTripPanel({ trip, onUnlock, isUnlocking, onShareSummary }: {
+function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking, onShareSummary }: {
   trip: TripPlan;
+  groupId: number;
+  participantName: string;
   onUnlock: () => void;
   isUnlocking: boolean;
   onShareSummary: () => void;
@@ -894,6 +896,8 @@ function LockedTripPanel({ trip, onUnlock, isUnlocking, onShareSummary }: {
   const flightsBooked = !!trip.flightsBooked;
   const lodgingBooked = !!t.lodgingBooked;
   const allBooked = flightsBooked && lodgingBooked;
+  const { data: pinboardItems = [] } = usePinboard(groupId);
+  const removePin = useRemovePin(groupId);
   const pipControls = useAnimationControls();
   const lastMinRef = useRef<number>(-1);
   const lastHrRef = useRef<number>(-1);
@@ -1138,6 +1142,48 @@ function LockedTripPanel({ trip, onUnlock, isUnlocking, onShareSummary }: {
           </motion.div>
         )}
 
+        {/* Pinboard */}
+        {pinboardItems.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="rounded-2xl border border-border bg-card p-4 space-y-3"
+          >
+            <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">📌 Pinboard</div>
+            <div className="flex flex-wrap gap-2">
+              <AnimatePresence>
+                {pinboardItems.map((item) => (
+                  <motion.div
+                    key={item.id}
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.8, opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="group flex items-center gap-1.5 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300 rounded-full pl-2 pr-1.5 py-1 text-xs font-medium border border-violet-200/50 dark:border-violet-700/50"
+                  >
+                    <span>{item.emoji}</span>
+                    <a
+                      href={`https://www.google.com/search?q=${encodeURIComponent(`${item.title} ${dest}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline"
+                    >
+                      {item.title}
+                    </a>
+                    <button
+                      onClick={() => removePin.mutate(item.id)}
+                      className="opacity-0 group-hover:opacity-100 ml-0.5 w-4 h-4 rounded-full flex items-center justify-center hover:bg-violet-200 dark:hover:bg-violet-700 transition-all text-[10px]"
+                    >
+                      ×
+                    </button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+
         {/* Actions */}
         <div className="space-y-2 pt-1">
           <Button
@@ -1164,6 +1210,7 @@ function LockedTripPanel({ trip, onUnlock, isUnlocking, onShareSummary }: {
 function TravelWorkspace({
   groupId,
   participantId,
+  participantName,
   trip,
   alternatives,
   tabMode,
@@ -1171,6 +1218,7 @@ function TravelWorkspace({
 }: {
   groupId: number;
   participantId: number;
+  participantName: string;
   trip: TripPlan | null | undefined;
   alternatives: TripAlternative[];
   tabMode?: boolean;
@@ -1217,6 +1265,8 @@ function TravelWorkspace({
       {isLocked && trip ? (
         <LockedTripPanel
           trip={trip}
+          groupId={groupId}
+          participantName={participantName}
           onUnlock={() => unlockMutation.mutate()}
           isUnlocking={unlockMutation.isPending}
           onShareSummary={onShareSummary}
@@ -1412,7 +1462,104 @@ function LodgingPipMessage({ destination, airbnbUrl, hotelsUrl, time }: { destin
   );
 }
 
-function PipMessage({ content, time }: { content: string; time: string }) {
+// ─── Activity Suggestions ──────────────────────────────────────────────────────
+function ActivityPipMessage({ destination, items, groupId, participantName, time }: {
+  destination: string;
+  items: { emoji: string; title: string; category: string }[];
+  groupId: number;
+  participantName: string;
+  time: string;
+}) {
+  const addPin = useAddPin(groupId);
+  // Show 4 at a time, keep the rest as a reserve pool to swap in
+  const [visible, setVisible] = useState(() => items.slice(0, 4));
+  const [pool, setPool] = useState(() => items.slice(4));
+  const [added, setAdded] = useState<Set<string>>(new Set());
+
+  const searchUrl = (title: string) =>
+    `https://www.google.com/search?q=${encodeURIComponent(`${title} ${destination}`)}`;
+
+  const handleAdd = (item: { emoji: string; title: string; category: string }) => {
+    if (added.has(item.title)) return;
+    addPin.mutate({ title: item.title, emoji: item.emoji, category: item.category, addedByName: participantName });
+    setAdded(prev => new Set(prev).add(item.title));
+    // Swap pinned item out for next from pool
+    setVisible(prev => {
+      const next = pool[0];
+      if (!next) return prev; // pool exhausted, leave as-is
+      setPool(p => p.slice(1));
+      return prev.map(v => v.title === item.title ? next : v);
+    });
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-start gap-2 max-w-[92%]"
+      data-testid="message-pip-activity"
+    >
+      <PipAvatar />
+      <div className="flex-1 min-w-0">
+        <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
+        <div className="px-4 py-3 rounded-2xl rounded-tl-none bg-gradient-to-br from-violet-100 to-indigo-100 dark:from-violet-900/30 dark:to-indigo-900/30 border border-violet-200/50 dark:border-violet-800/50 shadow-sm">
+          <p className="text-sm font-semibold text-violet-900 dark:text-violet-100 mb-3">
+            Here's what you can do in {destination} — tap + to pin, or the title to explore! 📌
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <AnimatePresence mode="popLayout">
+              {visible.map((item) => {
+                const isPinned = added.has(item.title);
+                return (
+                  <motion.div
+                    key={item.title}
+                    layout
+                    initial={{ opacity: 0, x: 10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -10 }}
+                    transition={{ duration: 0.18 }}
+                    className={cn(
+                      "flex items-center rounded-xl text-sm font-medium border overflow-hidden transition-colors",
+                      isPinned
+                        ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border-emerald-300/50"
+                        : "bg-white/70 dark:bg-white/10 text-violet-800 dark:text-violet-200 border-violet-200/40"
+                    )}
+                  >
+                    {/* Clickable title — opens Google search */}
+                    <a
+                      href={searchUrl(item.title)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2.5 flex-1 px-3 py-2.5 hover:underline"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <span className="text-lg leading-none shrink-0">{item.emoji}</span>
+                      <span className="leading-snug">{item.title}</span>
+                    </a>
+                    {/* Pin button */}
+                    <button
+                      onClick={() => handleAdd(item)}
+                      disabled={isPinned}
+                      className="shrink-0 w-10 self-stretch flex items-center justify-center border-l border-current/10 hover:bg-white/30 disabled:cursor-default transition-colors text-base"
+                    >
+                      {isPinned ? "✓" : "+"}
+                    </button>
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+          {pool.length === 0 && added.size > 0 && (
+            <p className="text-[10px] text-violet-500/70 mt-2 text-center">All suggestions explored! 🎉</p>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
+      </div>
+    </motion.div>
+  );
+}
+
+function PipMessage({ content, time, groupId, participantName }: { content: string; time: string; groupId: number; participantName: string }) {
   if (content.startsWith("FLIGHT_REC:")) {
     try {
       const payload = JSON.parse(content.slice("FLIGHT_REC:".length));
@@ -1425,6 +1572,14 @@ function PipMessage({ content, time }: { content: string; time: string }) {
     try {
       const payload = JSON.parse(content.slice("LODGING_REC:".length));
       return <LodgingPipMessage destination={payload.destination} airbnbUrl={payload.airbnbUrl} hotelsUrl={payload.hotelsUrl} time={time} />;
+    } catch {
+      // fall through to plain render
+    }
+  }
+  if (content.startsWith("ACTIVITY_REC:")) {
+    try {
+      const payload = JSON.parse(content.slice("ACTIVITY_REC:".length));
+      return <ActivityPipMessage destination={payload.destination} items={payload.items} groupId={groupId} participantName={participantName} time={time} />;
     } catch {
       // fall through to plain render
     }
@@ -1500,6 +1655,7 @@ function SystemMessage({ content, time }: { content: string; time: string }) {
 export default function GroupPage() {
   const [match, params] = useRoute("/g/:slug");
   const slug = match ? params.slug : "";
+  const [, setLocation] = useLocation();
 
   const { data: group, isLoading: groupLoading, error: groupError } = useGroup(slug);
   // useMessages returns all messages (user + pip) already interleaved and sorted by the server
@@ -1588,6 +1744,7 @@ export default function GroupPage() {
 
   const storedParticipantId = slug ? localStorage.getItem(`evite_participant_${slug}`) : null;
   const participants = group?.participants;
+  const myName = participants?.find(p => p.id === participantId)?.name ?? "You";
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1701,6 +1858,15 @@ export default function GroupPage() {
         {/* Header */}
         <header className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
+            <button
+              onClick={() => setLocation("/")}
+              className="shrink-0 p-1.5 rounded-lg hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+              title="My trips"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0">
+                <path d="M10 13L5 8L10 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
             <div className="font-bold text-lg truncate font-display">{group.name}</div>
             {trip?.status && (
               <span className="shrink-0" data-testid="status-confidence-pill">
@@ -1766,7 +1932,7 @@ export default function GroupPage() {
             {messages?.map((msg) => {
               const time = format(new Date(msg.createdAt ?? new Date()), "h:mm a");
               if (msg.isPip) {
-                return <PipMessage key={`pip-${msg.id}`} content={msg.content} time={time} />;
+                return <PipMessage key={`pip-${msg.id}`} content={msg.content} time={time} groupId={group.id} participantName={group.participants?.find(p => p.id === participantId)?.name ?? "You"} />;
               }
               if (!msg.participantId && !msg.isPip) {
                 return <SystemMessage key={`sys-${msg.id}`} content={msg.content} time={time} />;
@@ -1825,6 +1991,7 @@ export default function GroupPage() {
         <TravelWorkspace
           groupId={group.id}
           participantId={participantId}
+          participantName={myName}
           trip={trip}
           alternatives={alternatives}
           tabMode={mobileTab === "plan"}

@@ -55,10 +55,13 @@ export function useJoinGroup() {
     mutationFn: async ({ slug, name }: { slug: string } & JoinGroupRequest) => {
       const validated = api.groups.join.input.parse({ name });
       const url = buildUrl(api.groups.join.path, { slug });
-      
+      const token = localStorage.getItem("siftchat_token");
       const res = await fetch(url, {
         method: api.groups.join.method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(validated),
       });
 

@@ -152,9 +152,23 @@ export default function Dashboard() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tripName.trim()) return;
+    if (!tripName.trim() || !user) return;
     try {
       const group = await createGroup.mutateAsync({ name: tripName });
+      // Auto-join with the user's name so they don't have to re-enter it
+      const token = getStoredToken();
+      const joinRes = await fetch(`/api/groups/${group.shareLinkSlug}/join`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ name: user.name }),
+      });
+      if (joinRes.ok) {
+        const participant = await joinRes.json();
+        localStorage.setItem(`evite_participant_${group.shareLinkSlug}`, String(participant.id));
+      }
       setLocation(`/g/${group.shareLinkSlug}`);
     } catch { /* handled in hook */ }
   };

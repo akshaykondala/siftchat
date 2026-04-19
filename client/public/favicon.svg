@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Body -->
+  <rect x="2" y="2" width="28" height="28" rx="9" ry="9" fill="#7c3aed"/>
+  <!-- Shine -->
+  <ellipse cx="11" cy="9" rx="5" ry="3" fill="#a78bfa" opacity="0.5"/>
+  <!-- Left eye white -->
+  <circle cx="11" cy="16" r="4" fill="white"/>
+  <!-- Right eye white -->
+  <circle cx="21" cy="16" r="4" fill="white"/>
+  <!-- Left pupil -->
+  <circle cx="12" cy="16" r="2" fill="#1e1b4b"/>
+  <!-- Right pupil -->
+  <circle cx="22" cy="16" r="2" fill="#1e1b4b"/>
+  <!-- Left eye shine -->
+  <circle cx="13" cy="15" r="0.8" fill="white"/>
+  <!-- Right eye shine -->
+  <circle cx="23" cy="15" r="0.8" fill="white"/>
+</svg>

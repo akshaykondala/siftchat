@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+buildCommand = "npm install --include=dev && npm run build && npm run db:push"
+
+[deploy]
+startCommand = "npm start"
+healthcheckPath = "/api/auth/config"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

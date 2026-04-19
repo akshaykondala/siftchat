@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence, useAnimationControls } from "framer-motion";
 
 export const PIP_SPEECHES = [
-  "Let's go! ✈️",
+  "Let's go! 🙌",
   "Where to? 🗺️",
   "Pack your bags!",
   "Adventure awaits! 🌍",

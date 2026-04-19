@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useRoute, useLocation } from "wouter";
+import { getStoredUser } from "@/hooks/use-auth";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
 import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useLockTrip, useUnlockTrip, usePinboard, useAddPin, useRemovePin } from "@/hooks/use-trip";
@@ -17,7 +18,7 @@ import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
   BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
-  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock,
+  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map, Compass,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
 import { PipAvatar } from "@/components/pip-avatar";
@@ -122,7 +123,7 @@ function JoinModal({ groupName, onJoin, isLoading }: { groupName: string; onJoin
       <ShinyCard className="w-full max-w-md">
         <div className="text-center space-y-4">
           <div className="h-12 w-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4 text-primary">
-            <Plane className="w-6 h-6" />
+            <Globe className="w-6 h-6" />
           </div>
           <h2 className="text-2xl font-bold font-display">Join {groupName}</h2>
           <p className="text-muted-foreground">Enter your name to start chatting and planning your trip.</p>
@@ -166,7 +167,7 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
     return (
       <div className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5">
         <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/50 gap-3">
-          <Plane className="w-8 h-8 opacity-40" />
+          <Map className="w-8 h-8 opacity-40" />
           <p className="text-sm text-center">Start chatting — Pip will detect your trip details automatically.</p>
         </div>
       </div>
@@ -233,7 +234,7 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
           <TripField icon={<BedDouble className="w-4 h-4" />} label="Lodging" value={trip.lodgingPreference} placeholder="Lodging TBD" />
         )}
         <div className="flex items-center gap-3">
-          <span className="text-muted-foreground/60 shrink-0"><Plane className="w-4 h-4" /></span>
+          <span className="text-muted-foreground/60 shrink-0"><Plane className="w-4 h-4" /></span>{/* flights row — keep Plane */}
           <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground/60 w-20 shrink-0">Flights</span>
           {trip.flightsBooked ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid="badge-flights-booked">
@@ -707,6 +708,15 @@ function AlternativeCard({
 }
 
 // ─── Featured Flight Card ────────────────────────────────────────────────────
+interface FlightDetails {
+  source: string;
+  origin?: string;
+  destination?: string;
+  departDate?: string;
+  returnDate?: string;
+  title?: string;
+}
+
 function FeaturedFlightCard({ trip }: { trip: TripPlan }) {
   if (!trip.flightSearchUrl && !(trip as any).kayakUrl) return null;
   const origin = (trip as any).originCity as string | null;
@@ -715,15 +725,33 @@ function FeaturedFlightCard({ trip }: { trip: TripPlan }) {
   const isBooked = trip.flightsBooked;
 
   const finalizedUrl = (trip as any).finalizedFlightUrl as string | null;
+  const rawDetails = (trip as any).flightDetails as string | null;
+  const fd: FlightDetails | null = rawDetails ? (() => { try { return JSON.parse(rawDetails); } catch { return null; } })() : null;
+
+  // Build a human-readable route line from scraped details
+  const routeLine = fd?.origin && fd?.destination
+    ? `${fd.origin} → ${fd.destination}`
+    : fd?.title
+    ? fd.title
+    : origin
+    ? `${origin} → ${dest}`
+    : null;
+
+  const dateLine = fd?.departDate
+    ? fd.returnDate
+      ? `${fd.departDate} – ${fd.returnDate}`
+      : fd.departDate
+    : dates;
 
   if (isBooked) {
     return (
       <div className="rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 p-3 space-y-2">
         <div className="flex items-center gap-3">
           <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-          <div>
+          <div className="min-w-0">
             <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Flights finalized ✈️</p>
-            {dates && <p className="text-[11px] text-muted-foreground">{origin ? `${origin} → ${dest}` : dest} · {dates}</p>}
+            {routeLine && <p className="text-[11px] text-muted-foreground truncate">{routeLine}{dateLine ? ` · ${dateLine}` : ""}</p>}
+            {fd?.source && <p className="text-[10px] text-muted-foreground/60">via {fd.source}</p>}
           </div>
         </div>
         {finalizedUrl && (
@@ -975,7 +1003,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
         {countdown && trip.startDate ? (
           isTripped ? (
             <motion.div initial={{ scale: 0.8 }} animate={{ scale: 1 }} className="text-center text-5xl font-black mb-2">
-              ✈️ It's trip time!
+              🎉 It's trip time!
             </motion.div>
           ) : (
             <div className="flex flex-col items-center gap-3 mb-2">
@@ -1018,7 +1046,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
                 <PipCharacter speeches={[
                   `${countdown.days} day${countdown.days === 1 ? "" : "s"} to go! 🎉`,
                   "SO excited for this trip!",
-                  "Let's goooo! ✈️",
+                  "Let's goooo! 🙌",
                   "This is gonna be amazing!",
                   "Pack light, dream big! 🌍",
                   "Can't wait! 🧳",
@@ -1028,7 +1056,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
           )
         ) : (
           <div className="flex justify-center mb-2">
-            <PipCharacter speeches={["SO excited for this trip!", "Let's goooo! ✈️", "This is gonna be amazing!", "Can't wait! 🧳"]} />
+            <PipCharacter speeches={["SO excited for this trip!", "Let's gooo! 🙌", "This is gonna be amazing!", "Can't wait! 🧳"]} />
           </div>
         )}
       </motion.div>
@@ -1240,7 +1268,7 @@ function TravelWorkspace({
         "flex flex-col bg-card border-l",
         tabMode
           ? "h-full w-full"
-          : "h-full w-96 xl:w-[420px]"
+          : "h-full w-full"
       )}
     >
       {/* Sidebar header */}
@@ -1251,7 +1279,7 @@ function TravelWorkspace({
           : "bg-white/50 dark:bg-zinc-900/50"
       )}>
         <div className="flex items-center gap-2 font-bold text-primary">
-          {isLocked ? <Lock className="w-4 h-4 text-emerald-600" /> : <Plane className="w-4 h-4" />}
+          {isLocked ? <Lock className="w-4 h-4 text-emerald-600" /> : <Compass className="w-4 h-4" />}
           <span className="text-sm">{isLocked ? "Trip Locked 🔒" : "Trip Plan"}</span>
           {!isLocked && trip?.status && <ConfidencePill status={trip.status} />}
         </div>
@@ -1389,7 +1417,7 @@ function FlightPipMessage({ text, googleUrl, kayakUrl, time }: { text: string; g
         <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
         <div className="px-4 py-3 rounded-2xl rounded-tl-none text-sm leading-relaxed bg-gradient-to-br from-violet-100 to-indigo-100 text-violet-900 dark:from-violet-900/30 dark:to-indigo-900/30 dark:text-violet-100 shadow-sm border border-violet-200/50 dark:border-violet-800/50 space-y-3">
           <div className="flex items-start gap-2">
-            <Plane className="w-4 h-4 shrink-0 mt-0.5 text-violet-500" />
+            <Sparkles className="w-4 h-4 shrink-0 mt-0.5 text-violet-500" />
             <span>{text}</span>
           </div>
           {(googleUrl || kayakUrl) && (
@@ -1716,12 +1744,12 @@ export default function GroupPage() {
       || ([t?.startDate, t?.endDate].filter(Boolean).join(" → ") || null);
     const effectiveBudget = winnerAlt?.budgetBand || t?.budgetBand;
 
-    let text = `✈️ ${groupName}\n`;
+    let text = `🌍 ${groupName}\n`;
     if (effectiveDest) text += `📍 ${effectiveDest}\n`;
     if (effectiveDates) text += `📅 ${effectiveDates}\n`;
     if (effectiveBudget) text += `💰 ${effectiveBudget}\n`;
     if (t?.lodgingPreference) text += `🏨 ${t.lodgingPreference}\n`;
-    if (t?.flightsBooked) text += `✈️ Flights booked!\n`;
+    if (t?.flightsBooked) text += `✅ Flights booked!\n`;
 
     // Compute attendee lists with named still-deciding derived from full participant list
     const committed = (winnerAlt?.committedAttendeeNames ?? t?.committedAttendeeNames ?? []);
@@ -1811,7 +1839,14 @@ export default function GroupPage() {
     ? participants.find((p) => p.id === Number(storedParticipantId))
     : null;
 
+  // If logged in, auto-continue — no need to ask
+  const loggedInUser = getStoredUser();
   if (validStoredParticipant && !participantId && !forceShowJoin) {
+    if (loggedInUser) {
+      // Auto-continue silently
+      handleContinueAsExisting();
+      return null;
+    }
     return (
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-indigo-50 dark:from-violet-950/20 dark:via-background dark:to-indigo-950/20 flex items-center justify-center p-4">
         <motion.div
@@ -1820,7 +1855,7 @@ export default function GroupPage() {
           className="bg-white dark:bg-zinc-900 rounded-3xl p-8 shadow-2xl border border-primary/10 w-full max-w-md text-center"
         >
           <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-accent mx-auto mb-6 flex items-center justify-center">
-            <Plane className="w-8 h-8 text-white" />
+            <Globe className="w-8 h-8 text-white" />
           </div>
           <h2 className="text-2xl font-bold font-display mb-2">Welcome Back!</h2>
           <p className="text-muted-foreground mb-6">
@@ -2020,7 +2055,7 @@ export default function GroupPage() {
           onClick={() => setMobileTab("plan")}
           data-testid="tab-plan"
         >
-          <Plane className="w-5 h-5" />
+          <Map className="w-5 h-5" />
           Trip Plan
           {trip?.status && trip.status !== "Early ideas" && (
             <span className="absolute top-2 right-6 w-2 h-2 bg-primary rounded-full" />

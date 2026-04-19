@@ -76,6 +76,7 @@ export const tripPlans = pgTable("trip_plans", {
   hotelsUrl: text("hotels_url"),
   lastLodgingRecoKey: text("last_lodging_reco_key"),
   finalizedFlightUrl: text("finalized_flight_url"),
+  flightDetails: text("flight_details"),
   finalizedLodgingUrl: text("finalized_lodging_url"),
   confidenceScore: integer("confidence_score").default(0),
   status: text("status").default("Early ideas"),

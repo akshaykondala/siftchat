@@ -7,7 +7,7 @@ import { openai } from "./replit_integrations/audio/client";
 import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
 import { signup, login, loginWithGoogle, signToken, getUserById, authMiddleware, checkRateLimit, resetRateLimit, validateSignupInput, GOOGLE_CLIENT_ID } from "./auth";
 import { db } from "./db";
-import { participants, groups, tripPlans } from "@shared/schema";
+import { participants, groups, tripPlans, users } from "@shared/schema";
 import { eq, inArray } from "drizzle-orm";
 
 // ============================================================
@@ -610,6 +610,43 @@ export async function registerRoutes(
     res.json({ id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl });
   });
 
+  app.put("/api/users/me", authMiddleware, async (req, res) => {
+    const userId = (req as any).userId;
+    const { name, avatarUrl } = req.body;
+    if (!name || typeof name !== "string" || name.trim().length < 1) {
+      return res.status(400).json({ message: "Name is required" });
+    }
+    const [updated] = await db.update(users)
+      .set({ name: name.trim(), ...(avatarUrl !== undefined ? { avatarUrl: avatarUrl || null } : {}) })
+      .where(eq(users.id, userId))
+      .returning();
+    res.json({ id: updated.id, email: updated.email, name: updated.name, avatarUrl: updated.avatarUrl });
+  });
+
+  // === GROUP MANAGEMENT ===
+
+  app.patch("/api/groups/:groupId/name", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const userId = (req as any).userId;
+    const { name } = req.body;
+    if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ message: "Name required" });
+    const group = await storage.getGroupById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (group.createdByUserId !== userId) return res.status(403).json({ message: "Not authorized" });
+    const updated = await storage.updateGroupName(groupId, name.trim());
+    res.json(updated);
+  });
+
+  app.delete("/api/groups/:groupId", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const userId = (req as any).userId;
+    const group = await storage.getGroupById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (group.createdByUserId !== userId) return res.status(403).json({ message: "Not authorized" });
+    await storage.deleteGroup(groupId);
+    res.json({ ok: true });
+  });
+
   // === MY TRIPS ===
 
   app.get("/api/users/me/trips", authMiddleware, async (req, res) => {
@@ -701,7 +738,12 @@ async function respondToPipMention(groupId: number, question: string): Promise<v
 
     if (isFlightFinalize && !plan?.flightsBooked) {
       if (providedUrl) {
-        await storage.upsertTripPlan(groupId, { flightsBooked: true, finalizedFlightUrl: providedUrl } as any);
+        const details = await scrapeFlightDetails(providedUrl);
+        await storage.upsertTripPlan(groupId, {
+          flightsBooked: true,
+          finalizedFlightUrl: providedUrl,
+          flightDetails: details ? JSON.stringify(details) : null,
+        } as any);
         await postPipMessage(groupId, `Flights finalized! ✈️ I've saved the link for everyone — tap "Flights" in the trip panel to access it.`);
       } else {
         const airlineMatch = question.match(/\b(united|delta|american|southwest|jetblue|alaska|spirit|frontier|allegiant|air canada|british airways|lufthansa|air france)\b/i);
@@ -833,9 +875,113 @@ async function generateActivitySuggestions(groupId: number, destination: string)
 }
 
 
+// ─── Flight URL Scraper ───────────────────────────────────────────────────────
+
+export interface FlightDetails {
+  source: string;
+  origin?: string;
+  destination?: string;
+  departDate?: string;
+  returnDate?: string;
+  title?: string;
+}
+
+function formatIsoDate(d: string): string {
+  const dt = new Date(d + "T12:00:00Z");
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function formatSkyscannerDate(d: string): string {
+  const year = "20" + d.slice(0, 2);
+  const month = d.slice(2, 4);
+  const day = d.slice(4, 6);
+  return formatIsoDate(`${year}-${month}-${day}`);
+}
+
+function domainLabel(host: string): string {
+  const map: Record<string, string> = {
+    "kayak.com": "Kayak", "google.com": "Google Flights",
+    "expedia.com": "Expedia", "skyscanner.com": "Skyscanner",
+    "skyscanner.net": "Skyscanner", "united.com": "United Airlines",
+    "delta.com": "Delta", "aa.com": "American Airlines",
+    "southwest.com": "Southwest", "jetblue.com": "JetBlue",
+    "alaskaair.com": "Alaska Airlines", "spirit.com": "Spirit",
+    "flyfrontier.com": "Frontier", "aircanada.com": "Air Canada",
+    "britishairways.com": "British Airways", "lufthansa.com": "Lufthansa",
+    "airfrance.com": "Air France",
+  };
+  return map[host] || host;
+}
+
+async function scrapeFlightDetails(url: string): Promise<FlightDetails | null> {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+
+    // Kayak: kayak.com/flights/JFK-LAX/2024-08-15/2024-08-22
+    const kayakMatch = url.match(/kayak\.[a-z.]+\/flights\/([A-Z]{3})-([A-Z]{3})\/(\d{4}-\d{2}-\d{2})(?:\/(\d{4}-\d{2}-\d{2}))?/i);
+    if (kayakMatch) {
+      return {
+        source: "Kayak",
+        origin: kayakMatch[1].toUpperCase(),
+        destination: kayakMatch[2].toUpperCase(),
+        departDate: formatIsoDate(kayakMatch[3]),
+        ...(kayakMatch[4] ? { returnDate: formatIsoDate(kayakMatch[4]) } : {}),
+      };
+    }
+
+    // Skyscanner: skyscanner.com/transport/flights/jfk/lax/240815/240822
+    const skyMatch = url.match(/skyscanner\.[a-z.]+\/transport\/flights\/([a-z]{3})\/([a-z]{3})\/(\d{6})(?:\/(\d{6}))?/i);
+    if (skyMatch) {
+      return {
+        source: "Skyscanner",
+        origin: skyMatch[1].toUpperCase(),
+        destination: skyMatch[2].toUpperCase(),
+        departDate: formatSkyscannerDate(skyMatch[3]),
+        ...(skyMatch[4] ? { returnDate: formatSkyscannerDate(skyMatch[4]) } : {}),
+      };
+    }
+
+    // Google Flights with readable q param
+    if (host === "google.com" && parsed.pathname.includes("/travel/flights")) {
+      const q = parsed.searchParams.get("q");
+      return { source: "Google Flights", ...(q ? { title: q } : {}) };
+    }
+
+    // Fetch page for title/OG tags (5s timeout)
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "text/html" },
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const html = await res.text();
+        const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1];
+        const pageTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1];
+        const rawTitle = (ogTitle || pageTitle || "").trim().replace(/\s+/g, " ");
+        if (rawTitle) return { source: domainLabel(host), title: rawTitle.slice(0, 80) };
+      }
+    } catch {
+      clearTimeout(timer);
+    }
+
+    return { source: domainLabel(host) };
+  } catch {
+    return null;
+  }
+}
+
 async function handlePendingFinalization(groupId: number, type: 'flights' | 'lodging', url: string): Promise<void> {
   if (type === 'flights') {
-    await storage.upsertTripPlan(groupId, { flightsBooked: true, finalizedFlightUrl: url } as any);
+    const details = await scrapeFlightDetails(url);
+    await storage.upsertTripPlan(groupId, {
+      flightsBooked: true,
+      finalizedFlightUrl: url,
+      flightDetails: details ? JSON.stringify(details) : null,
+    } as any);
     await postPipMessage(groupId, `Flights finalized! ✈️ I've saved the link for everyone — tap "Flights" in the trip panel to access it.`);
   } else {
     await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: url } as any);

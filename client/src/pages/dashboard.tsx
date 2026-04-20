@@ -465,7 +465,7 @@ export default function Dashboard() {
   const upcomingCount = trips.filter(t => t.tripPlan?.startDate).length;
 
   return (
-    <div className="min-h-screen bg-background" style={{
+    <div className="h-screen flex flex-col bg-background overflow-hidden" style={{
       backgroundImage: `radial-gradient(circle at 20% 20%, rgba(124,58,237,0.04) 0%, transparent 50%),
                         radial-gradient(circle at 80% 80%, rgba(79,70,229,0.04) 0%, transparent 50%)`,
     }}>
@@ -507,7 +507,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-10">
+      <main className="flex-1 overflow-y-auto"><div className="max-w-5xl mx-auto px-6 py-10">
         {/* Hero */}
         <div className="flex items-start justify-between mb-10 gap-4">
           <div>
@@ -571,7 +571,7 @@ export default function Dashboard() {
             ))}
           </div>
         )}
-      </main>
+      </div></main>
 
       {/* Profile modal */}
       <AnimatePresence>

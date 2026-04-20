@@ -14,6 +14,15 @@ The problem isn't planning — it's commitment and accountability. When your fri
 
 ---
 
+## Bug fixes / polish todo
+<!-- Add items here anytime. Priorities: P0 = fix now, P1 = soon, P2 = nice to have -->
+
+| Priority | Item | Notes |
+|----------|------|-------|
+| P1 | Email invites not working on prod | RESEND_API_KEY set but still returning "not configured" — check Railway deploy logs after latest push |
+
+---
+
 ## Roadmap (priority order)
 
 ### 1. Email invites (start here)

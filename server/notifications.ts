@@ -1,23 +1,32 @@
-import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
-
-const expo = new Expo({
-  accessToken: process.env.EXPO_ACCESS_TOKEN,
-});
-
 export interface PushPayload {
   title: string;
   body: string;
   data?: Record<string, string>;
 }
 
+// Lazy-loaded because expo-server-sdk is ESM-only and cannot be require()'d.
+// Dynamic import() works from CJS modules in Node.js 12+.
+let _expoInstance: any = null;
+let _ExpoClass: any = null;
+
+async function getExpo() {
+  if (!_expoInstance) {
+    const mod = await import("expo-server-sdk");
+    _ExpoClass = mod.Expo ?? mod.default;
+    _expoInstance = new _ExpoClass({ accessToken: process.env.EXPO_ACCESS_TOKEN });
+  }
+  return { expo: _expoInstance, Expo: _ExpoClass };
+}
+
 export async function sendPushNotifications(
   tokens: string[],
   payload: PushPayload
 ): Promise<void> {
+  const { expo, Expo } = await getExpo();
   const validTokens = tokens.filter((t) => Expo.isExpoPushToken(t));
   if (validTokens.length === 0) return;
 
-  const messages: ExpoPushMessage[] = validTokens.map((to) => ({
+  const messages = validTokens.map((to: string) => ({
     to,
     sound: "default",
     title: payload.title,
@@ -29,9 +38,8 @@ export async function sendPushNotifications(
 
   for (const chunk of chunks) {
     try {
-      const tickets: ExpoPushTicket[] = await expo.sendPushNotificationsAsync(chunk);
-
-      for (const ticket of tickets) {
+      const tickets = await expo.sendPushNotificationsAsync(chunk);
+      for (const ticket of tickets as any[]) {
         if (ticket.status === "error") {
           console.error("Push notification error:", ticket.message, ticket.details);
         }
@@ -42,8 +50,6 @@ export async function sendPushNotifications(
   }
 }
 
-// Derives a short human-readable title from a Pip message for the notification preview.
-// Strips structured payloads (FLIGHT_REC, LODGING_REC, ACTIVITY_REC) down to readable text.
 export function pipMessageToNotification(content: string, groupName: string): PushPayload {
   let body = content;
 
@@ -65,7 +71,6 @@ export function pipMessageToNotification(content: string, groupName: string): Pu
     body = "Pip added activity ideas to your trip board. 🎉";
   }
 
-  // Truncate long messages for notification preview
   if (body.length > 150) body = body.slice(0, 147) + "…";
 
   return {

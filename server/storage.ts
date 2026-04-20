@@ -1,10 +1,10 @@
 import { db } from "./db";
 import {
   groups, participants, messages, plans, planVotes,
-  tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems,
+  tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems, bookingCommitments,
   type Group, type Participant, type Message, type Plan, type PlanVote,
   type TripPlan, type TripAlternative, type SupportSignal, type PipMessage, type PinboardItem,
-  type CommitmentLevel,
+  type BookingCommitment, type CommitmentLevel,
 } from "@shared/schema";
 import { eq, desc, and, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
@@ -61,6 +61,10 @@ export interface IStorage {
   getPinboardItems(groupId: number): Promise<PinboardItem[]>;
   addPinboardItem(groupId: number, title: string, emoji: string, category: string, addedByName: string): Promise<PinboardItem>;
   removePinboardItem(id: number): Promise<void>;
+
+  // Booking Commitments
+  getCommitments(groupId: number): Promise<BookingCommitment[]>;
+  upsertCommitment(groupId: number, participantId: number, data: { flightBooked?: boolean; lodgingStatus?: string }): Promise<BookingCommitment>;
 
   // Group management
   updateGroupName(groupId: number, name: string): Promise<Group>;
@@ -348,12 +352,36 @@ export class DatabaseStorage implements IStorage {
     await db.delete(pinboardItems).where(eq(pinboardItems.id, id));
   }
 
+  // === BOOKING COMMITMENT METHODS ===
+
+  async getCommitments(groupId: number): Promise<BookingCommitment[]> {
+    return db.select().from(bookingCommitments).where(eq(bookingCommitments.groupId, groupId));
+  }
+
+  async upsertCommitment(groupId: number, participantId: number, data: { flightBooked?: boolean; lodgingStatus?: string }): Promise<BookingCommitment> {
+    const [existing] = await db.select().from(bookingCommitments).where(
+      and(eq(bookingCommitments.groupId, groupId), eq(bookingCommitments.participantId, participantId))
+    );
+    if (existing) {
+      const [updated] = await db.update(bookingCommitments)
+        .set({ ...data, updatedAt: new Date() })
+        .where(and(eq(bookingCommitments.groupId, groupId), eq(bookingCommitments.participantId, participantId)))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(bookingCommitments)
+      .values({ groupId, participantId, ...data })
+      .returning();
+    return created;
+  }
+
   async updateGroupName(groupId: number, name: string): Promise<Group> {
     const [group] = await db.update(groups).set({ name }).where(eq(groups.id, groupId)).returning();
     return group;
   }
 
   async deleteGroup(groupId: number): Promise<void> {
+    await db.delete(bookingCommitments).where(eq(bookingCommitments.groupId, groupId));
     await db.delete(pinboardItems).where(eq(pinboardItems.groupId, groupId));
     await db.delete(pipMessages).where(eq(pipMessages.groupId, groupId));
     await db.delete(supportSignals).where(eq(supportSignals.groupId, groupId));

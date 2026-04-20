@@ -1234,6 +1234,180 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
   );
 }
 
+// ─── Commitment Cards ────────────────────────────────────────────────────────
+interface Commitment { participantId: number; flightBooked: boolean; lodgingStatus: string; }
+
+function CommitmentCards({
+  groupId,
+  participantId,
+  participants,
+  lodgingType,
+  flightsRelevant,
+  lodgingRelevant,
+}: {
+  groupId: number;
+  participantId: number;
+  participants: { id: number; name: string }[];
+  lodgingType: string | null;
+  flightsRelevant: boolean;
+  lodgingRelevant: boolean;
+}) {
+  const [commitments, setCommitments] = React.useState<Commitment[]>([]);
+  const [updating, setUpdating] = React.useState(false);
+
+  const fetchCommitments = React.useCallback(async () => {
+    const res = await fetch(`/api/groups/${groupId}/commitments`);
+    if (res.ok) setCommitments(await res.json());
+  }, [groupId]);
+
+  React.useEffect(() => { fetchCommitments(); }, [fetchCommitments]);
+
+  const myCommitment = commitments.find(c => c.participantId === participantId);
+
+  const update = async (patch: { flightBooked?: boolean; lodgingStatus?: string }) => {
+    setUpdating(true);
+    try {
+      const token = localStorage.getItem("siftchat_token");
+      await fetch(`/api/groups/${groupId}/commitments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ participantId, ...patch }),
+      });
+      await fetchCommitments();
+    } finally { setUpdating(false); }
+  };
+
+  if (!flightsRelevant && !lodgingRelevant) return null;
+
+  const isRental = lodgingType === "rental";
+  const isHotel = lodgingType === "hotel";
+  const anyoneBookedRental = commitments.some(c => c.lodgingStatus === "booked");
+
+  return (
+    <div>
+      <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Who's Booked</div>
+      <div className="rounded-2xl border border-border bg-card overflow-hidden divide-y divide-border">
+        {participants.map(p => {
+          const c = commitments.find(x => x.participantId === p.id);
+          const isMe = p.id === participantId;
+          const flightDone = c?.flightBooked ?? false;
+          const lodgingDone = c?.lodgingStatus === "booked" || c?.lodgingStatus === "covered";
+
+          return (
+            <div key={p.id} className="flex items-center gap-3 px-3 py-2.5">
+              {/* Avatar */}
+              <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-[11px] font-black text-primary shrink-0">
+                {p.name.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold truncate">{isMe ? "You" : p.name}</p>
+                {isRental && c?.lodgingStatus === "booked" && (
+                  <p className="text-[10px] text-emerald-600">booked the place</p>
+                )}
+              </div>
+
+              {/* Flight pill */}
+              {flightsRelevant && (
+                isMe ? (
+                  <button
+                    disabled={updating}
+                    onClick={() => update({ flightBooked: !flightDone })}
+                    className={cn(
+                      "text-[10px] font-bold px-2 py-1 rounded-full border transition-colors shrink-0",
+                      flightDone
+                        ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                        : "bg-secondary border-border text-muted-foreground hover:border-primary/40"
+                    )}
+                  >
+                    {flightDone ? "✈️ Booked" : "Flight?"}
+                  </button>
+                ) : (
+                  <span className={cn(
+                    "text-[10px] font-bold px-2 py-1 rounded-full border shrink-0",
+                    flightDone
+                      ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                      : "bg-secondary border-border text-muted-foreground"
+                  )}>
+                    {flightDone ? "✈️ Booked" : "–"}
+                  </span>
+                )
+              )}
+
+              {/* Lodging pill */}
+              {lodgingRelevant && (
+                isMe ? (
+                  isRental ? (
+                    <div className="flex gap-1 shrink-0">
+                      {!anyoneBookedRental || c?.lodgingStatus === "booked" ? (
+                        <button
+                          disabled={updating}
+                          onClick={() => update({ lodgingStatus: c?.lodgingStatus === "booked" ? "pending" : "booked" })}
+                          className={cn(
+                            "text-[10px] font-bold px-2 py-1 rounded-full border transition-colors",
+                            c?.lodgingStatus === "booked"
+                              ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                              : "bg-secondary border-border text-muted-foreground hover:border-primary/40"
+                          )}
+                        >
+                          {c?.lodgingStatus === "booked" ? "🏠 I booked it" : "I booked it"}
+                        </button>
+                      ) : null}
+                      {anyoneBookedRental && c?.lodgingStatus !== "booked" && (
+                        <button
+                          disabled={updating}
+                          onClick={() => update({ lodgingStatus: c?.lodgingStatus === "covered" ? "pending" : "covered" })}
+                          className={cn(
+                            "text-[10px] font-bold px-2 py-1 rounded-full border transition-colors",
+                            c?.lodgingStatus === "covered"
+                              ? "bg-blue-100 border-blue-300 text-blue-700 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-300"
+                              : "bg-secondary border-border text-muted-foreground hover:border-primary/40"
+                          )}
+                        >
+                          {c?.lodgingStatus === "covered" ? "✓ I'm in" : "I'm in"}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      disabled={updating}
+                      onClick={() => update({ lodgingStatus: lodgingDone ? "pending" : "booked" })}
+                      className={cn(
+                        "text-[10px] font-bold px-2 py-1 rounded-full border transition-colors shrink-0",
+                        lodgingDone
+                          ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                          : "bg-secondary border-border text-muted-foreground hover:border-primary/40"
+                      )}
+                    >
+                      {lodgingDone ? "🏠 Booked" : isHotel ? "Room?" : "Lodging?"}
+                    </button>
+                  )
+                ) : (
+                  <span className={cn(
+                    "text-[10px] font-bold px-2 py-1 rounded-full border shrink-0",
+                    c?.lodgingStatus === "booked"
+                      ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                      : c?.lodgingStatus === "covered"
+                      ? "bg-blue-100 border-blue-300 text-blue-700 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-300"
+                      : "bg-secondary border-border text-muted-foreground"
+                  )}>
+                    {c?.lodgingStatus === "booked" ? "🏠 Booked" : c?.lodgingStatus === "covered" ? "✓ In" : "–"}
+                  </span>
+                )
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {isRental && !anyoneBookedRental && (
+        <p className="text-[10px] text-muted-foreground mt-1.5 px-1">Someone tap "I booked it" once the place is reserved — others can then confirm they're in.</p>
+      )}
+      {isHotel && (
+        <p className="text-[10px] text-muted-foreground mt-1.5 px-1">Hotel — everyone books their own room.</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Travel Workspace Panel ────────────────────────────────────────────────────
 function TravelWorkspace({
   groupId,
@@ -1243,6 +1417,7 @@ function TravelWorkspace({
   alternatives,
   tabMode,
   onShareSummary,
+  allParticipants,
 }: {
   groupId: number;
   participantId: number;
@@ -1251,6 +1426,7 @@ function TravelWorkspace({
   alternatives: TripAlternative[];
   tabMode?: boolean;
   onShareSummary: () => void;
+  allParticipants: { id: number; name: string }[];
 }) {
   const voteMutation = useVoteAlternative(groupId);
   const attendanceMutation = useUpdateAttendance(groupId);
@@ -1324,6 +1500,18 @@ function TravelWorkspace({
               <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Lodging</div>
               <FeaturedLodgingCard trip={trip} />
             </div>
+          )}
+
+          {/* Commitment Cards */}
+          {trip && allParticipants.length > 0 && (
+            <CommitmentCards
+              groupId={groupId}
+              participantId={participantId}
+              participants={allParticipants}
+              lodgingType={(trip as any).lodgingType ?? null}
+              flightsRelevant={!!(trip.flightSearchUrl || (trip as any).kayakUrl || trip.flightsBooked)}
+              lodgingRelevant={!!((trip as any).airbnbUrl || (trip as any).hotelsUrl || trip.lodgingBooked || trip.lodgingPreference)}
+            />
           )}
 
           {/* Planning Signals */}
@@ -2067,6 +2255,7 @@ export default function GroupPage() {
           alternatives={alternatives}
           tabMode={mobileTab === "plan"}
           onShareSummary={shareTripSummary}
+          allParticipants={group.participants ?? []}
         />
       </div>
 

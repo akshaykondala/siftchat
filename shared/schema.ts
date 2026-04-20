@@ -78,6 +78,7 @@ export const tripPlans = pgTable("trip_plans", {
   finalizedFlightUrl: text("finalized_flight_url"),
   flightDetails: text("flight_details"),
   finalizedLodgingUrl: text("finalized_lodging_url"),
+  lodgingType: text("lodging_type"), // "hotel" | "rental" | null
   confidenceScore: integer("confidence_score").default(0),
   status: text("status").default("Early ideas"),
   likelyAttendeeNames: text("likely_attendee_names").array(),
@@ -86,6 +87,18 @@ export const tripPlans = pgTable("trip_plans", {
   winningAlternativeId: integer("winning_alternative_id"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+export const bookingCommitments = pgTable("booking_commitments", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  participantId: integer("participant_id").notNull(),
+  flightBooked: boolean("flight_booked").default(false),
+  // "pending" | "booked" (I booked it) | "covered" (rental — someone else booked, I'm in)
+  lodgingStatus: text("lodging_status").default("pending"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type BookingCommitment = typeof bookingCommitments.$inferSelect;
 
 export const tripAlternatives = pgTable("trip_alternatives", {
   id: serial("id").primaryKey(),

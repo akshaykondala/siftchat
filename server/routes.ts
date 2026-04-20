@@ -10,6 +10,14 @@ import { db } from "./db";
 import { participants, groups, tripPlans, users } from "@shared/schema";
 import { eq, inArray } from "drizzle-orm";
 
+function inferLodgingType(lodgingPreference: string | null | undefined): "hotel" | "rental" | null {
+  if (!lodgingPreference) return null;
+  const s = lodgingPreference.toLowerCase();
+  if (/airbnb|vrbo|rental|house|cabin|villa|cottage|apartment|condo|chalet|bungalow/.test(s)) return "rental";
+  if (/hotel|motel|hostel|inn|resort|marriott|hilton|hyatt|sheraton|westin|holiday inn/.test(s)) return "hotel";
+  return null;
+}
+
 // ============================================================
 //  AI ANALYSIS COOLDOWN
 //  Only re-analyze after 5 new messages OR 3 minutes, whichever comes first.
@@ -621,6 +629,22 @@ export async function registerRoutes(
       .where(eq(users.id, userId))
       .returning();
     res.json({ id: updated.id, email: updated.email, name: updated.name, avatarUrl: updated.avatarUrl });
+  });
+
+  // === BOOKING COMMITMENTS ===
+
+  app.get("/api/groups/:groupId/commitments", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const commitments = await storage.getCommitments(groupId);
+    res.json(commitments);
+  });
+
+  app.post("/api/groups/:groupId/commitments", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId, flightBooked, lodgingStatus } = req.body;
+    if (!participantId) return res.status(400).json({ message: "participantId required" });
+    const result = await storage.upsertCommitment(groupId, participantId, { flightBooked, lodgingStatus });
+    res.json(result);
   });
 
   // === INVITE BY EMAIL ===
@@ -1282,6 +1306,7 @@ RULES:
     endDate: mainPlan.endDate,
     budgetBand: mainPlan.budgetBand,
     lodgingPreference: mainPlan.lodgingPreference,
+    lodgingType: inferLodgingType(mainPlan.lodgingPreference),
     flightSearchUrl: builtUrls.flightSearchUrl,
     kayakUrl: builtUrls.kayakUrl,
     ...(mainPlan.originCity ? { originCity: mainPlan.originCity } : {}),

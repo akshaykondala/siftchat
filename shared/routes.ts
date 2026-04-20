@@ -199,6 +199,28 @@ export const api = {
       responses: { 200: z.object({ success: z.boolean() }) },
     },
   },
+  deviceTokens: {
+    register: {
+      method: 'POST' as const,
+      path: '/api/users/device-token',
+      input: z.object({
+        token: z.string().min(1),
+        platform: z.enum(['ios', 'android']),
+      }),
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        401: errorSchemas.validation,
+      },
+    },
+    unregister: {
+      method: 'DELETE' as const,
+      path: '/api/users/device-token/:token',
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        401: errorSchemas.validation,
+      },
+    },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {

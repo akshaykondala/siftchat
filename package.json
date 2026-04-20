@@ -11,6 +11,10 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1",
+    "@capacitor/ios": "^8.3.1",
+    "@capacitor/push-notifications": "^8.0.3",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.4",
@@ -54,6 +58,7 @@
     "drizzle-orm": "^0.39.3",
     "drizzle-zod": "^0.7.1",
     "embla-carousel-react": "^8.6.0",
+    "expo-server-sdk": "^6.1.0",
     "express": "^5.0.1",
     "express-session": "^1.18.1",
     "framer-motion": "^11.18.2",

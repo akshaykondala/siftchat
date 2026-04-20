@@ -1,7 +1,7 @@
 import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM = "Pip from siftchat <pip@siftchat.xyz>";
+const FROM = "siftchat <hello@siftchat.xyz>";
 const BASE_URL = process.env.APP_URL || "https://siftchat.xyz";
 
 export async function sendTripInvite({
@@ -20,10 +20,11 @@ export async function sendTripInvite({
   await resend.emails.send({
     from: FROM,
     to: toEmail,
-    subject: `${inviterName} invited you to plan a trip 🌍`,
+    subject: `${inviterName} invited you to plan a trip`,
+    text: `Hey! ${inviterName} invited you to help plan "${tripName}" on siftchat.\n\nJoin here: ${joinUrl}\n\nYou received this because someone shared a trip invite with you.`,
     html: `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f5f4f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f4f0;padding:40px 16px;">
@@ -33,34 +34,40 @@ export async function sendTripInvite({
         <!-- Header -->
         <tr>
           <td style="background:linear-gradient(135deg,#7c3aed,#4f46e5);padding:32px 32px 24px;text-align:center;">
-            <div style="width:56px;height:56px;background:#6d28d9;border-radius:14px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;">
-              <svg width="56" height="56" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="2" width="28" height="28" rx="9" fill="#7c3aed"/>
-                <ellipse cx="11" cy="9" rx="5" ry="3" fill="#a78bfa" opacity="0.5"/>
-                <circle cx="11" cy="16" r="4" fill="white"/>
-                <circle cx="21" cy="16" r="4" fill="white"/>
-                <circle cx="12" cy="16" r="2" fill="#1e1b4b"/>
-                <circle cx="22" cy="16" r="2" fill="#1e1b4b"/>
-                <circle cx="13" cy="15" r="0.8" fill="white"/>
-                <circle cx="23" cy="15" r="0.8" fill="white"/>
-              </svg>
-            </div>
+            <table cellpadding="0" cellspacing="0" style="margin:0 auto 12px;">
+              <tr><td align="center">
+                <svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="56" height="56" rx="14" fill="#6d28d9"/>
+                  <!-- left eye white -->
+                  <circle cx="19" cy="28" r="9" fill="white"/>
+                  <!-- right eye white -->
+                  <circle cx="37" cy="28" r="9" fill="white"/>
+                  <!-- left pupil -->
+                  <circle cx="21" cy="28" r="5" fill="#1e1b4b"/>
+                  <!-- right pupil -->
+                  <circle cx="39" cy="28" r="5" fill="#1e1b4b"/>
+                  <!-- left highlight -->
+                  <circle cx="23" cy="25" r="2" fill="white"/>
+                  <!-- right highlight -->
+                  <circle cx="41" cy="25" r="2" fill="white"/>
+                </svg>
+              </td></tr>
+            </table>
             <h1 style="color:white;margin:0;font-size:26px;font-weight:900;letter-spacing:-0.5px;">siftchat</h1>
-            <p style="color:rgba(255,255,255,0.75);margin:4px 0 0;font-size:13px;">plan trips together</p>
           </td>
         </tr>
 
         <!-- Body -->
         <tr>
           <td style="padding:32px;">
-            <h2 style="margin:0 0 8px;font-size:20px;font-weight:800;color:#111827;">You're invited! 🎉</h2>
+            <h2 style="margin:0 0 8px;font-size:20px;font-weight:800;color:#111827;">You're invited</h2>
             <p style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.6;">
-              <strong style="color:#111827;">${inviterName}</strong> invited you to help plan
-              <strong style="color:#111827;">${tripName}</strong> on siftchat.
+              <strong style="color:#111827;">${inviterName}</strong> wants you to help plan
+              <strong style="color:#111827;">${tripName}</strong>.
             </p>
 
             <p style="margin:0 0 24px;font-size:14px;color:#6b7280;line-height:1.6;">
-              Chat with your crew, vote on plans, and let Pip (our AI) keep things organized — so this trip actually happens.
+              Chat with the crew, vote on plans, and sort out flights and lodging — all in one place.
             </p>
 
             <!-- CTA -->
@@ -69,7 +76,7 @@ export async function sendTripInvite({
                 <td align="center">
                   <a href="${joinUrl}"
                      style="display:inline-block;background:#7c3aed;color:white;text-decoration:none;font-weight:700;font-size:15px;padding:14px 32px;border-radius:12px;letter-spacing:-0.2px;">
-                    Join the trip →
+                    Join the trip
                   </a>
                 </td>
               </tr>
@@ -85,7 +92,7 @@ export async function sendTripInvite({
         <tr>
           <td style="background:#f9fafb;padding:16px 32px;border-top:1px solid #f3f4f6;">
             <p style="margin:0;font-size:11px;color:#9ca3af;text-align:center;">
-              Sent by Pip · siftchat.xyz · You received this because someone invited you to a trip.
+              siftchat.xyz &middot; You received this because ${inviterName} shared a trip invite with you.
             </p>
           </td>
         </tr>

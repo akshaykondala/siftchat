@@ -4,6 +4,8 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
+import { getStoredToken } from "@/hooks/use-auth";
+import { usePushNotifications } from "@/hooks/use-push-notifications";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
 import GroupPage from "@/pages/group";
@@ -11,6 +13,7 @@ import NotFound from "@/pages/not-found";
 
 function Router() {
   const { isLoggedIn } = useAuth();
+  usePushNotifications(getStoredToken());
 
   return (
     <Switch>

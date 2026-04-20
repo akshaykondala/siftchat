@@ -3,7 +3,7 @@ import { useRoute, useLocation } from "wouter";
 import { getStoredUser } from "@/hooks/use-auth";
 import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
-import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useLockTrip, useUnlockTrip, usePinboard, useAddPin, useRemovePin } from "@/hooks/use-trip";
+import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useAllAttendance, useLockTrip, useUnlockTrip, usePinboard, useAddPin, useRemovePin } from "@/hooks/use-trip";
 import { usePresence } from "@/hooks/use-presence";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import { format, differenceInDays, differenceInHours, differenceInMinutes, diffe
 import confetti from "canvas-confetti";
 import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
-  BedDouble, TrendingUp, CheckCircle2, HelpCircle,
+  BedDouble, TrendingUp, CheckCircle2,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
   Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map as MapIcon, Compass, Mail, X,
 } from "lucide-react";
@@ -86,33 +86,6 @@ function TypingIndicator({ names }: { names: string[] }) {
   );
 }
 
-// ─── Confidence Pill ───────────────────────────────────────────────────────────
-function ConfidencePill({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    "Early ideas": "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
-    "Narrowing options": "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
-    "Almost decided": "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-    "Trip locked": "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-  };
-  const icons: Record<string, React.ReactNode> = {
-    "Early ideas": <Sparkles className="w-3 h-3" />,
-    "Narrowing options": <TrendingUp className="w-3 h-3" />,
-    "Almost decided": <Star className="w-3 h-3" />,
-    "Trip locked": <CheckCircle2 className="w-3 h-3" />,
-  };
-  return (
-    <span
-      data-testid="status-confidence-pill"
-      className={cn(
-        "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold",
-        styles[status] ?? styles["Early ideas"]
-      )}
-    >
-      {icons[status] ?? icons["Early ideas"]}
-      {status}
-    </span>
-  );
-}
 
 // ─── Join Modal ────────────────────────────────────────────────────────────────
 function JoinModal({ groupName, onJoin, isLoading }: { groupName: string; onJoin: (name: string) => void; isLoading: boolean }) {
@@ -162,7 +135,19 @@ function TripField({ icon, label, value, placeholder }: { icon: React.ReactNode;
 }
 
 // ─── Trip Card ─────────────────────────────────────────────────────────────────
-function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: TripAlternative | null }) {
+function TripCard({
+  trip,
+  winnerAlt,
+  groupId,
+  allParticipants = [],
+}: {
+  trip: TripPlan | null;
+  winnerAlt?: TripAlternative | null;
+  groupId: number;
+  allParticipants?: { id: number; name: string }[];
+}) {
+  const { data: allSignals = [] } = useAllAttendance(groupId);
+
   if (!trip) {
     return (
       <div className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5">
@@ -180,8 +165,45 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
     || (trip.startDate && trip.endDate ? `${trip.startDate} → ${trip.endDate}` : trip.startDate || trip.endDate || null);
   const effectiveBudget = winnerAlt?.budgetBand || trip.budgetBand;
 
-  const likelyNames = (winnerAlt?.likelyAttendeeNames ?? trip.likelyAttendeeNames) ?? [];
-  const committedNames = (winnerAlt?.committedAttendeeNames ?? trip.committedAttendeeNames) ?? [];
+  // Build participant id -> name map
+  const participantNameMap = new Map(allParticipants.map((p) => [p.id, p.name]));
+
+  // Deduplicate signals per participant: explicit beats AI, newest wins within same source
+  const mainPlanSignals = allSignals.filter((s) => s.alternativeId === null);
+  const deduped = new Map<number, typeof mainPlanSignals[number]>();
+  for (const sig of mainPlanSignals) {
+    const existing = deduped.get(sig.participantId);
+    if (!existing || sig.source === "explicit" || (existing.source === "ai" && sig.source === "ai")) {
+      deduped.set(sig.participantId, sig);
+    }
+  }
+  const dedupedSignals = Array.from(deduped.values());
+
+  const explicitCommitted = dedupedSignals
+    .filter((s) => s.commitmentLevel === "committed")
+    .map((s) => participantNameMap.get(s.participantId))
+    .filter(Boolean) as string[];
+  const explicitMaybe = dedupedSignals
+    .filter((s) => s.commitmentLevel === "likely")
+    .map((s) => participantNameMap.get(s.participantId))
+    .filter(Boolean) as string[];
+  const explicitUnavailable = dedupedSignals
+    .filter((s) => s.commitmentLevel === "unavailable")
+    .map((s) => participantNameMap.get(s.participantId))
+    .filter(Boolean) as string[];
+
+  // Merge with AI-detected names, deduplicating case-insensitively
+  const signaled = new Set(
+    [...explicitCommitted, ...explicitMaybe, ...explicitUnavailable].map((n) => n.toLowerCase())
+  );
+  const aiCommitted = Array.from(new Set((winnerAlt?.committedAttendeeNames ?? trip.committedAttendeeNames) ?? []))
+    .filter((n) => !signaled.has(n.toLowerCase()));
+  const aiLikely = Array.from(new Set((winnerAlt?.likelyAttendeeNames ?? trip.likelyAttendeeNames) ?? []))
+    .filter((n) => !signaled.has(n.toLowerCase()) && !aiCommitted.map(x => x.toLowerCase()).includes(n.toLowerCase()));
+
+  const committedNames = Array.from(new Set([...explicitCommitted, ...aiCommitted]));
+  const likelyNames = Array.from(new Set([...explicitMaybe, ...aiLikely]))
+    .filter((n) => !committedNames.map(x => x.toLowerCase()).includes(n.toLowerCase()));
 
   const isLocked = trip?.status === "Trip locked";
 
@@ -256,58 +278,29 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
         </div>
       </div>
 
-      <div className="pt-2 border-t border-primary/10 space-y-2">
-        <div>
-          <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 mb-1.5 flex items-center gap-1">
-            <UserCheck className="w-3 h-3" /> Committed
+      {(committedNames.length > 0 || likelyNames.length > 0 || explicitUnavailable.length > 0) && (
+        <div className="pt-2 border-t border-primary/10">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">Who's in</div>
+          <div className="flex flex-wrap gap-1">
+            {committedNames.map((name) => (
+              <Badge key={name} className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800 text-xs px-2 py-0.5">
+                <UserCheck className="w-2.5 h-2.5 mr-1" />{name}
+              </Badge>
+            ))}
+            {likelyNames.map((name) => (
+              <Badge key={name} variant="outline" className="bg-amber-50/60 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800 text-xs px-2 py-0.5">
+                {name}?
+              </Badge>
+            ))}
+            {explicitUnavailable.map((name) => (
+              <Badge key={name} variant="outline" className="bg-red-50/60 text-red-600 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800 text-xs px-2 py-0.5 line-through opacity-70">
+                {name}
+              </Badge>
+            ))}
           </div>
-          {committedNames.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {committedNames.map((name) => (
-                <Badge key={name} className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800 text-xs px-2 py-0.5">
-                  {name}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <span className="text-xs text-muted-foreground/50 italic">No commitments yet</span>
-          )}
         </div>
+      )}
 
-        <div>
-          <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-400 mb-1.5 flex items-center gap-1">
-            <Heart className="w-3 h-3" /> Likely going
-          </div>
-          {likelyNames.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {likelyNames.map((name) => (
-                <Badge key={name} variant="outline" className="bg-indigo-50/60 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:border-indigo-800 text-xs px-2 py-0.5">
-                  {name}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <span className="text-xs text-muted-foreground/50 italic">No likely attendees yet</span>
-          )}
-        </div>
-      </div>
-
-      <div className="pt-2 border-t border-primary/10">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Confidence</span>
-          <span className="text-xs font-bold text-primary">
-            {(trip.confidenceScore ?? 0) > 0 ? `${trip.confidenceScore}%` : "Calculating…"}
-          </span>
-        </div>
-        <div className="h-1.5 bg-primary/10 rounded-full overflow-hidden">
-          <motion.div
-            className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full"
-            initial={{ width: 0 }}
-            animate={{ width: `${trip.confidenceScore ?? 0}%` }}
-            transition={{ duration: 0.8, ease: "easeOut" }}
-          />
-        </div>
-      </div>
 
       {trip.updatedAt && (
         <div className="text-[10px] text-muted-foreground/60 text-right" data-testid="text-last-updated">
@@ -319,71 +312,6 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
 }
 
 // ─── Planning Signals Strip ─────────────────────────────────────────────────────
-function PlanningSignalsStrip({ trip }: { trip: TripPlan | null }) {
-  if (!trip) return null;
-
-  const chips: { label: string; color: string; icon: React.ReactNode }[] = [];
-
-  if (trip.destination) chips.push({ label: trip.destination, color: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300", icon: <MapPin className="w-3 h-3" /> });
-  if (trip.startDate) chips.push({ label: trip.startDate, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
-  if (trip.endDate && trip.endDate !== trip.startDate) chips.push({ label: `→ ${trip.endDate}`, color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <Calendar className="w-3 h-3" /> });
-  if (trip.flightsBooked) chips.push({ label: "Flights booked ✓", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <Plane className="w-3 h-3" /> });
-  if (trip.lodgingPreference) chips.push({ label: trip.lodgingPreference, color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300", icon: <BedDouble className="w-3 h-3" /> });
-
-  const questions = trip.unresolvedQuestions ?? [];
-  const committed = trip.committedAttendeeNames ?? [];
-  const likely = trip.likelyAttendeeNames ?? [];
-
-  if (chips.length === 0 && questions.length === 0 && committed.length === 0 && likely.length === 0) return null;
-
-  return (
-    <div className="space-y-2">
-      {chips.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {chips.map((chip, i) => (
-            <span
-              key={i}
-              className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium", chip.color)}
-              data-testid={`chip-signal-${i}`}
-            >
-              {chip.icon}
-              {chip.label}
-            </span>
-          ))}
-        </div>
-      )}
-      {/* Attendance signal chips */}
-      {(committed.length > 0 || likely.length > 0) && (
-        <div className="flex flex-wrap gap-1.5">
-          {committed.map((name, i) => (
-            <span key={`c-${i}`} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid={`chip-attendance-committed-${i}`}>
-              <UserCheck className="w-3 h-3" /> {name} ✓
-            </span>
-          ))}
-          {likely.map((name, i) => (
-            <span key={`l-${i}`} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300" data-testid={`chip-attendance-likely-${i}`}>
-              <Heart className="w-3 h-3" /> {name}
-            </span>
-          ))}
-        </div>
-      )}
-      {questions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {questions.map((q, i) => (
-            <span
-              key={i}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-              data-testid={`chip-question-${i}`}
-            >
-              <HelpCircle className="w-3 h-3" />
-              {q}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Attendance Buttons ─────────────────────────────────────────────────────────
 function AttendanceButtons({
@@ -396,9 +324,8 @@ function AttendanceButtons({
   isPending: boolean;
 }) {
   const buttons: { level: CommitmentLevel; label: string; color: string }[] = [
-    { level: "interested", label: "Interested", color: "bg-zinc-100 text-zinc-600 hover:bg-zinc-200" },
-    { level: "likely", label: "Likely", color: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100" },
     { level: "committed", label: "I'm in", color: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" },
+    { level: "likely", label: "Maybe", color: "bg-amber-50 text-amber-700 hover:bg-amber-100" },
     { level: "unavailable", label: "Can't make it", color: "bg-red-50 text-red-600 hover:bg-red-100" },
   ];
 
@@ -426,8 +353,8 @@ function AttendanceButtons({
 // ─── My Status Card ────────────────────────────────────────────────────────────
 const COMMITMENT_CONFIG: Record<CommitmentLevel, { label: string; color: string; dot: string }> = {
   committed: { label: "I'm in", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", dot: "bg-emerald-500" },
-  likely: { label: "Likely", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300", dot: "bg-indigo-500" },
-  interested: { label: "Interested", color: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400", dot: "bg-zinc-400" },
+  likely: { label: "Maybe", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300", dot: "bg-amber-400" },
+  interested: { label: "Maybe", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300", dot: "bg-amber-400" },
   unavailable: { label: "Can't go", color: "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400", dot: "bg-red-400" },
 };
 
@@ -446,7 +373,7 @@ function buildSummaryLine(signals: SupportSignal[], alternatives: TripAlternativ
 
   const parts: string[] = [];
 
-  for (const sig of slotMap.values()) {
+  for (const sig of Array.from(slotMap.values())) {
     const level = sig.commitmentLevel as CommitmentLevel;
     const cfg = COMMITMENT_CONFIG[level];
     if (!cfg) continue;
@@ -460,9 +387,8 @@ function buildSummaryLine(signals: SupportSignal[], alternatives: TripAlternativ
     }
 
     if (level === "committed") parts.push(`in for ${dest}`);
-    else if (level === "likely") parts.push(`likely for ${dest}`);
-    else if (level === "interested") parts.push(`interested in ${dest}`);
-    else if (level === "unavailable") parts.push(`unavailable for ${dest}`);
+    else if (level === "likely" || level === "interested") parts.push(`maybe for ${dest}`);
+    else if (level === "unavailable") parts.push(`can't make ${dest}`);
   }
 
   if (parts.length === 0) return "Set your stance on each option below.";
@@ -498,8 +424,7 @@ function MyStatusCard({
 
   const stanceButtons: { level: CommitmentLevel; label: string }[] = [
     { level: "committed", label: "I'm in" },
-    { level: "likely", label: "Likely" },
-    { level: "interested", label: "Interested" },
+    { level: "likely", label: "Maybe" },
     { level: "unavailable", label: "Can't go" },
   ];
 
@@ -647,9 +572,9 @@ function AlternativeCard({
               <UserCheck className="w-2.5 h-2.5 mr-0.5" />{name}
             </Badge>
           ))}
-          {likelyNames.map((name) => (
-            <Badge key={`l-${name}`} variant="outline" className="text-[10px] px-1.5 py-0 text-indigo-700 border-indigo-200 dark:text-indigo-300">
-              {name}
+          {likelyNames.filter(n => !committedNames.includes(n)).map((name) => (
+            <Badge key={`l-${name}`} variant="outline" className="text-[10px] px-1.5 py-0 text-amber-700 border-amber-200 dark:text-amber-300">
+              {name}?
             </Badge>
           ))}
         </div>
@@ -717,12 +642,206 @@ interface FlightDetails {
   title?: string;
 }
 
-function FeaturedFlightCard({ trip }: { trip: TripPlan }) {
+function DeadlinePicker({
+  label,
+  value,
+  onSave,
+}: {
+  label: string;
+  value: string | null;
+  onSave: (date: string | null) => void;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState(value ?? "");
+
+  const daysUntil = value
+    ? Math.ceil((new Date(value + "T23:59:59").getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  const urgencyClass =
+    daysUntil !== null && daysUntil <= 1
+      ? "text-red-600 dark:text-red-400"
+      : daysUntil !== null && daysUntil <= 3
+      ? "text-amber-600 dark:text-amber-400"
+      : "text-muted-foreground";
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 shrink-0">
+        <input
+          type="date"
+          className="text-[11px] border rounded-lg px-1.5 py-0.5 bg-background h-6 w-28"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          autoFocus
+        />
+        <button
+          className="text-[11px] font-semibold text-violet-600 px-1.5 h-6 rounded-lg hover:bg-violet-50 dark:hover:bg-violet-900/30 transition-colors"
+          onClick={() => { onSave(draft || null); setEditing(false); }}
+        >✓</button>
+        <button
+          className="text-[11px] text-muted-foreground px-1 h-6 rounded-lg hover:bg-muted transition-colors"
+          onClick={() => setEditing(false)}
+        >✕</button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors group shrink-0"
+      onClick={() => { setDraft(value ?? ""); setEditing(true); }}
+    >
+      {!value && <Clock className="w-3 h-3" />}
+      {value ? (
+        <span className={cn(urgencyClass, "underline underline-offset-2 decoration-dashed")}>
+          edit
+        </span>
+      ) : (
+        <span className="italic group-hover:not-italic">{label}</span>
+      )}
+    </button>
+  );
+}
+
+function DeadlinesCard({
+  trip,
+  groupId,
+  onTripUpdate,
+}: {
+  trip: TripPlan;
+  groupId: number;
+  onTripUpdate?: () => void;
+}) {
+  const flightDeadline = (trip as any).flightDeadline as string | null;
+  const lodgingDeadline = (trip as any).lodgingDeadline as string | null;
+  const flightsBooked = trip.flightsBooked;
+  const lodgingBooked = trip.lodgingBooked;
+
+  const save = async (patch: { flightDeadline?: string | null; lodgingDeadline?: string | null }) => {
+    await fetch(`/api/groups/${groupId}/deadlines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    onTripUpdate?.();
+  };
+
+  function daysUntil(dateStr: string) {
+    return Math.ceil((new Date(dateStr + "T23:59:59").getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  }
+
+  const flightDays = flightDeadline ? daysUntil(flightDeadline) : null;
+  const lodgingDays = lodgingDeadline ? daysUntil(lodgingDeadline) : null;
+
+  const urgency = (days: number | null) =>
+    days === null ? "none"
+    : days <= 1 ? "critical"
+    : days <= 3 ? "warn"
+    : days <= 7 ? "soon"
+    : "ok";
+
+  const urgencyBg: Record<string, string> = {
+    critical: "bg-red-50 border-red-300 dark:bg-red-950/30 dark:border-red-700",
+    warn: "bg-amber-50 border-amber-300 dark:bg-amber-950/30 dark:border-amber-700",
+    soon: "bg-violet-50 border-violet-200 dark:bg-violet-950/20 dark:border-violet-800",
+    ok: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800",
+    none: "bg-muted/40 border-border",
+  };
+  const urgencyText: Record<string, string> = {
+    critical: "text-red-700 dark:text-red-400",
+    warn: "text-amber-700 dark:text-amber-400",
+    soon: "text-violet-700 dark:text-violet-400",
+    ok: "text-emerald-700 dark:text-emerald-400",
+    none: "text-muted-foreground",
+  };
+
+  const countdownLabel = (days: number | null) =>
+    days === null ? null
+    : days <= 0 ? "⚠️ Overdue"
+    : days === 1 ? "1 day left"
+    : `${days} days left`;
+
+  const hasAnyDeadline = flightDeadline || lodgingDeadline;
+  const allBooked = flightsBooked && lodgingBooked;
+  if (allBooked) return null;
+
+  return (
+    <div className={cn(
+      "rounded-xl border p-3 space-y-2",
+      hasAnyDeadline
+        ? urgencyBg[urgency(Math.min(flightDays ?? 999, lodgingDays ?? 999))]
+        : "bg-card/80 border-border"
+    )}>
+      <div className="flex items-center gap-1.5">
+        <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+        <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Book-by Deadlines</span>
+        {hasAnyDeadline && (
+          <span className={cn("ml-auto text-[10px] font-bold", urgencyText[urgency(Math.min(flightDays ?? 999, lodgingDays ?? 999))])}>
+            {countdownLabel(Math.min(flightDays ?? 999, lodgingDays ?? 999))}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        {!flightsBooked && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-sm">✈️</span>
+              <span className="text-[11px] font-medium text-foreground/80 truncate">Flights</span>
+              {flightDeadline && (
+                <span className={cn("text-[10px] font-semibold shrink-0", urgencyText[urgency(flightDays)])}>
+                  {new Date(flightDeadline + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                </span>
+              )}
+            </div>
+            <DeadlinePicker
+              label="Set deadline"
+              value={flightDeadline}
+              onSave={(date) => save({ flightDeadline: date })}
+            />
+          </div>
+        )}
+        {!lodgingBooked && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-sm">🏠</span>
+              <span className="text-[11px] font-medium text-foreground/80 truncate">Lodging</span>
+              {lodgingDeadline && (
+                <span className={cn("text-[10px] font-semibold shrink-0", urgencyText[urgency(lodgingDays)])}>
+                  {new Date(lodgingDeadline + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                </span>
+              )}
+            </div>
+            <DeadlinePicker
+              label="Set deadline"
+              value={lodgingDeadline}
+              onSave={(date) => save({ lodgingDeadline: date })}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FeaturedFlightCard({ trip, groupId, onTripUpdate }: { trip: TripPlan; groupId?: number; onTripUpdate?: () => void }) {
   if (!trip.flightSearchUrl && !(trip as any).kayakUrl) return null;
   const origin = (trip as any).originCity as string | null;
   const dest = trip.destination ?? "destination";
   const dates = trip.startDate && trip.endDate ? `${trip.startDate} – ${trip.endDate}` : null;
   const isBooked = trip.flightsBooked;
+  const flightDeadline = (trip as any).flightDeadline as string | null;
+
+  const saveFlightDeadline = async (date: string | null) => {
+    if (!groupId) return;
+    await fetch(`/api/groups/${groupId}/deadlines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flightDeadline: date }),
+    });
+    onTripUpdate?.();
+  };
 
   const finalizedUrl = (trip as any).finalizedFlightUrl as string | null;
   const rawDetails = (trip as any).flightDetails as string | null;
@@ -793,17 +912,28 @@ function FeaturedFlightCard({ trip }: { trip: TripPlan }) {
 }
 
 // ─── Featured Lodging Card ───────────────────────────────────────────────────
-function FeaturedLodgingCard({ trip }: { trip: TripPlan }) {
+function FeaturedLodgingCard({ trip, groupId, onTripUpdate }: { trip: TripPlan; groupId?: number; onTripUpdate?: () => void }) {
   const t = trip as any;
   if (!t.airbnbUrl && !t.hotelsUrl) return null;
   const dest = trip.destination ?? "destination";
   const dates = trip.startDate && trip.endDate ? `${trip.startDate} – ${trip.endDate}` : null;
   const isBooked = t.lodgingBooked;
   const finalizedLodgingUrl = t.finalizedLodgingUrl as string | null;
+  const lodgingDeadline = t.lodgingDeadline as string | null;
   const guestCount = Math.max(
     (trip.likelyAttendeeNames?.length ?? 0),
     (trip.committedAttendeeNames?.length ?? 0),
   ) || null;
+
+  const saveLodgingDeadline = async (date: string | null) => {
+    if (!groupId) return;
+    await fetch(`/api/groups/${groupId}/deadlines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lodgingDeadline: date }),
+    });
+    onTripUpdate?.();
+  };
 
   if (isBooked) {
     return (
@@ -1150,7 +1280,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
         </motion.div>
 
         {/* Who's going — committed only, deduplicated */}
-        {[...new Set(committed)].length > 0 && (
+        {Array.from(new Set(committed)).length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1159,7 +1289,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
           >
             <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">The Crew</div>
             <div className="flex flex-wrap gap-2">
-              {[...new Set(committed)].map((name) => (
+              {Array.from(new Set(committed)).map((name) => (
                 <div key={name} className="flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 rounded-full pl-1 pr-3 py-1">
                   <PresenceAvatar name={name} size="xs" />
                   <span className="text-xs font-semibold">{name}</span>
@@ -1312,10 +1442,11 @@ function CommitmentCards({
                   <button
                     disabled={updating}
                     onClick={() => update({ flightBooked: !flightDone })}
+                    title={flightDone ? "Click to undo" : undefined}
                     className={cn(
                       "text-[10px] font-bold px-2 py-1 rounded-full border transition-colors shrink-0",
                       flightDone
-                        ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                        ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300 hover:bg-red-50 hover:border-red-300 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
                         : "bg-secondary border-border text-muted-foreground hover:border-primary/40"
                     )}
                   >
@@ -1408,6 +1539,90 @@ function CommitmentCards({
   );
 }
 
+// ─── Trip Progress Bar ─────────────────────────────────────────────────────────
+function TripProgressBar({
+  trip,
+  commitments,
+  participantCount,
+}: {
+  trip: TripPlan | null | undefined;
+  commitments: { flightBooked: boolean }[];
+  participantCount: number;
+}) {
+  if (!trip) return null;
+
+  const flightCommittedCount = commitments.filter((c) => c.flightBooked).length;
+  const crewIn = participantCount > 0 && flightCommittedCount >= participantCount;
+
+  const steps = [
+    {
+      label: "Destination",
+      done: !!trip.destination,
+      icon: "🌍",
+    },
+    {
+      label: "Dates",
+      done: !!(trip.startDate || trip.endDate),
+      icon: "📅",
+    },
+    {
+      label: "Crew in",
+      done: crewIn,
+      icon: "🙋",
+    },
+    {
+      label: "Flights",
+      done: trip.flightsBooked === true,
+      icon: "✈️",
+    },
+    {
+      label: "Lodging",
+      done: trip.lodgingBooked === true,
+      icon: "🏠",
+    },
+  ];
+
+  const doneCount = steps.filter((s) => s.done).length;
+  const pct = Math.round((doneCount / steps.length) * 100);
+
+  return (
+    <div className="px-1 py-2">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Trip Progress</span>
+        <span className="text-[10px] font-bold text-muted-foreground">{pct}%</span>
+      </div>
+      <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden mb-3">
+        <motion.div
+          className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500"
+          initial={{ width: 0 }}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+        />
+      </div>
+      <div className="flex gap-1">
+        {steps.map((step, i) => (
+          <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+            <div
+              className={cn(
+                "w-6 h-6 rounded-full flex items-center justify-center text-[11px] transition-all",
+                step.done
+                  ? "bg-violet-100 dark:bg-violet-900/40 ring-1 ring-violet-400"
+                  : "bg-muted ring-1 ring-border opacity-50"
+              )}
+              title={step.label}
+            >
+              {step.done ? step.icon : <span className="text-muted-foreground text-[9px] font-bold">{i + 1}</span>}
+            </div>
+            <span className={cn("text-[8px] text-center leading-tight", step.done ? "text-violet-600 dark:text-violet-400 font-semibold" : "text-muted-foreground")}>
+              {step.label}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Travel Workspace Panel ────────────────────────────────────────────────────
 function TravelWorkspace({
   groupId,
@@ -1418,6 +1633,7 @@ function TravelWorkspace({
   tabMode,
   onShareSummary,
   allParticipants,
+  onTripUpdate,
 }: {
   groupId: number;
   participantId: number;
@@ -1427,11 +1643,20 @@ function TravelWorkspace({
   tabMode?: boolean;
   onShareSummary: () => void;
   allParticipants: { id: number; name: string }[];
+  onTripUpdate?: () => void;
 }) {
   const voteMutation = useVoteAlternative(groupId);
   const attendanceMutation = useUpdateAttendance(groupId);
   const lockMutation = useLockTrip(groupId);
   const unlockMutation = useUnlockTrip(groupId);
+
+  const [progressCommitments, setProgressCommitments] = React.useState<{ flightBooked: boolean }[]>([]);
+  React.useEffect(() => {
+    fetch(`/api/groups/${groupId}/commitments`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setProgressCommitments(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [groupId]);
 
   const winnerAltId = trip?.winningAlternativeId;
   const isLocked = trip?.status === "Trip locked";
@@ -1457,8 +1682,7 @@ function TravelWorkspace({
         <div className="flex items-center gap-2 font-bold text-primary">
           {isLocked ? <Lock className="w-4 h-4 text-emerald-600" /> : <Compass className="w-4 h-4" />}
           <span className="text-sm">{isLocked ? "Trip Locked 🔒" : "Trip Plan"}</span>
-          {!isLocked && trip?.status && <ConfidencePill status={trip.status} />}
-        </div>
+          </div>
         {!isLocked && (
           <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={onShareSummary} data-testid="button-share-trip-summary">
             <Share2 className="w-3.5 h-3.5" /> Share
@@ -1476,13 +1700,26 @@ function TravelWorkspace({
           onShareSummary={onShareSummary}
         />
       ) : (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 lg:pb-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 md:pb-4">
+          {/* Trip Progress Bar */}
+          {trip && (
+            <div className="rounded-xl border bg-card/80 px-3 py-2">
+              <TripProgressBar
+                trip={trip}
+                commitments={progressCommitments}
+                participantCount={allParticipants.length}
+              />
+            </div>
+          )}
+
           {/* Trip Card */}
           <div>
             <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Current Plan</div>
             <TripCard
               trip={trip ?? null}
               winnerAlt={winnerAltId ? alternatives.find((a) => a.id === winnerAltId) ?? null : null}
+              groupId={groupId}
+              allParticipants={allParticipants}
             />
           </div>
 
@@ -1490,7 +1727,7 @@ function TravelWorkspace({
           {trip && (trip.flightSearchUrl || (trip as any).kayakUrl) && (
             <div>
               <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Flights</div>
-              <FeaturedFlightCard trip={trip} />
+              <FeaturedFlightCard trip={trip} groupId={groupId} onTripUpdate={onTripUpdate} />
             </div>
           )}
 
@@ -1498,8 +1735,17 @@ function TravelWorkspace({
           {trip && ((trip as any).airbnbUrl || (trip as any).hotelsUrl) && (
             <div>
               <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Lodging</div>
-              <FeaturedLodgingCard trip={trip} />
+              <FeaturedLodgingCard trip={trip} groupId={groupId} onTripUpdate={onTripUpdate} />
             </div>
+          )}
+
+          {/* Book-by Deadlines */}
+          {trip && (
+            <DeadlinesCard
+              trip={trip}
+              groupId={groupId}
+              onTripUpdate={onTripUpdate}
+            />
           )}
 
           {/* Commitment Cards */}
@@ -1508,19 +1754,12 @@ function TravelWorkspace({
               groupId={groupId}
               participantId={participantId}
               participants={allParticipants}
-              lodgingType={(trip as any).lodgingType ?? null}
+              lodgingType={(trip as any).airbnbUrl ? "rental" : (trip as any).hotelsUrl ? "hotel" : ((trip as any).lodgingType ?? null)}
               flightsRelevant={!!(trip.flightSearchUrl || (trip as any).kayakUrl || trip.flightsBooked)}
               lodgingRelevant={!!((trip as any).airbnbUrl || (trip as any).hotelsUrl || trip.lodgingBooked || trip.lodgingPreference)}
             />
           )}
 
-          {/* Planning Signals */}
-          {trip && (
-            <div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Detected Signals</div>
-              <PlanningSignalsStrip trip={trip} />
-            </div>
-          )}
 
           {/* My Status */}
           {(trip || activeAlternatives.length > 0) && (
@@ -1820,13 +2059,50 @@ function PipMessage({ content, time, groupId, participantName }: { content: stri
   );
 }
 
-function renderWithPipMention(content: string) {
-  const parts = content.split(/(@pip\b)/gi);
-  return parts.map((part, i) =>
-    /^@pip$/i.test(part)
-      ? <span key={i} className="font-semibold text-violet-500 dark:text-violet-400">{part}</span>
-      : part
-  );
+function getLinkMeta(url: string): { label: string; icon: string; color: string } {
+  if (/airbnb\.com/i.test(url)) return { label: "Airbnb", icon: "🏠", color: "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-800" };
+  if (/vrbo\.com/i.test(url)) return { label: "VRBO", icon: "🏠", color: "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-800" };
+  if (/booking\.com/i.test(url)) return { label: "Booking.com", icon: "🏨", color: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800" };
+  if (/hotels\.com/i.test(url)) return { label: "Hotels.com", icon: "🏨", color: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800" };
+  if (/google\.com\/travel\/flights/i.test(url)) return { label: "Google Flights", icon: "✈️", color: "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/20 dark:text-violet-300 dark:border-violet-800" };
+  if (/kayak\.com/i.test(url)) return { label: "Kayak", icon: "✈️", color: "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/20 dark:text-violet-300 dark:border-violet-800" };
+  if (/skyscanner/i.test(url)) return { label: "Skyscanner", icon: "✈️", color: "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/20 dark:text-violet-300 dark:border-violet-800" };
+  if (/expedia\.com/i.test(url)) return { label: "Expedia", icon: "✈️", color: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800" };
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    return { label: host, icon: "🔗", color: "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700" };
+  } catch {
+    return { label: "Link", icon: "🔗", color: "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700" };
+  }
+}
+
+function renderMessageContent(content: string) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const pipRegex = /(@pip\b)/gi;
+  const parts = content.split(/(https?:\/\/[^\s]+|@pip\b)/gi);
+  return parts.map((part, i) => {
+    if (/^@pip$/i.test(part)) {
+      return <span key={i} className="font-semibold text-violet-500 dark:text-violet-400">{part}</span>;
+    }
+    if (urlRegex.test(part)) {
+      urlRegex.lastIndex = 0;
+      const meta = getLinkMeta(part);
+      return (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs font-medium mx-0.5 no-underline hover:opacity-80 transition-opacity", meta.color)}
+          onClick={e => e.stopPropagation()}
+        >
+          <span>{meta.icon}</span>
+          <span>{meta.label}</span>
+        </a>
+      );
+    }
+    return part;
+  });
 }
 
 function UserMessage({ content, name, isMe, time }: { content: string; name: string; isMe: boolean; time: string }) {
@@ -1844,7 +2120,7 @@ function UserMessage({ content, name, isMe, time }: { content: string; name: str
           ? "bg-primary text-primary-foreground rounded-tr-none"
           : "bg-white dark:bg-zinc-800 border rounded-tl-none"
       )}>
-        {renderWithPipMention(content)}
+        {renderMessageContent(content)}
       </div>
       <span className="text-[10px] text-muted-foreground mt-1 opacity-60">{time}</span>
     </motion.div>
@@ -1876,7 +2152,7 @@ export default function GroupPage() {
   const { data: group, isLoading: groupLoading, error: groupError } = useGroup(slug);
   // useMessages returns all messages (user + pip) already interleaved and sorted by the server
   const { data: messages } = useMessages(group?.id ?? 0);
-  const { data: trip } = useTripPlan(group?.id ?? 0);
+  const { data: trip, refetch: refetchTrip } = useTripPlan(group?.id ?? 0);
   const { data: alternatives = [] } = useTripAlternatives(group?.id ?? 0);
 
   const joinGroup = useJoinGroup();
@@ -1884,6 +2160,7 @@ export default function GroupPage() {
 
   const { toast } = useToast();
   const [messageText, setMessageText] = useState("");
+  const [pastedLinks, setPastedLinks] = useState<{ url: string }[]>([]);
   const [participantId, setParticipantId] = useState<number | null>(null);
   const [forceShowJoin, setForceShowJoin] = useState(false);
   const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
@@ -2022,13 +2299,15 @@ export default function GroupPage() {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageText.trim() || !group || !participantId) return;
-    const content = messageText;
+    const linkSuffix = pastedLinks.map(l => l.url).join(" ");
+    const fullContent = [messageText.trim(), linkSuffix].filter(Boolean).join(" ");
+    if (!fullContent || !group || !participantId) return;
     setMessageText("");
+    setPastedLinks([]);
     try {
-      await sendMessage.mutateAsync({ groupId: group.id, participantId, content });
+      await sendMessage.mutateAsync({ groupId: group.id, participantId, content: fullContent });
     } catch {
-      setMessageText(content);
+      setMessageText(messageText);
     }
   };
 
@@ -2100,13 +2379,13 @@ export default function GroupPage() {
       {/* ── LEFT: Chat Panel ── */}
       <div className={cn(
         "flex flex-col h-full relative min-w-0",
-        "lg:flex",
+        "md:flex",
         mobileTab === "plan" ? "hidden" : "flex",
-        "pb-14 lg:pb-0",
-        isLocked ? "lg:w-80 xl:w-96" : "flex-1"
+        "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0",
+        isLocked ? "md:w-80 lg:w-96" : "flex-1"
       )}>
         {/* Header */}
-        <header className="h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0">
+        <header className="min-h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0 pb-4 pt-[calc(1rem+env(safe-area-inset-top))]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <button
               onClick={() => setLocation("/")}
@@ -2118,11 +2397,6 @@ export default function GroupPage() {
               </svg>
             </button>
             <div className="font-bold text-lg truncate font-display">{group.name}</div>
-            {trip?.status && (
-              <span className="shrink-0" data-testid="status-confidence-pill">
-                <ConfidencePill status={trip.status} />
-              </span>
-            )}
           </div>
 
           {/* Online presence avatars */}
@@ -2218,10 +2492,40 @@ export default function GroupPage() {
 
         {/* Input */}
         <div className="p-4 bg-background border-t shrink-0">
+          {pastedLinks.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2 max-w-4xl mx-auto">
+              {pastedLinks.map((link, i) => {
+                const meta = getLinkMeta(link.url);
+                return (
+                  <span key={i} className={cn("inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full border text-xs font-medium", meta.color)}>
+                    <span>{meta.icon}</span>
+                    <span>{meta.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => setPastedLinks(l => l.filter((_, j) => j !== i))}
+                      className="ml-0.5 opacity-60 hover:opacity-100 transition-opacity rounded-full hover:bg-black/10 p-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
           <form onSubmit={handleSend} className="flex gap-2 max-w-4xl mx-auto">
             <Input
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData("text");
+                const urls = text.match(/https?:\/\/[^\s]+/g);
+                if (urls && urls.length > 0) {
+                  e.preventDefault();
+                  const stripped = text.replace(/https?:\/\/[^\s]+/g, "").trim();
+                  if (stripped) setMessageText(prev => (prev + (prev ? " " : "") + stripped).trim());
+                  setPastedLinks(prev => [...prev, ...urls.map(url => ({ url }))]);
+                }
+              }}
               placeholder="Message the group, or @pip to ask Pip directly…"
               className="rounded-full pl-6 bg-secondary/50 border-transparent focus:bg-background focus:border-primary/20 transition-all shadow-inner"
               data-testid="input-message"
@@ -2230,7 +2534,7 @@ export default function GroupPage() {
               type="submit"
               size="icon"
               className="rounded-full h-10 w-10 shrink-0 shadow-md"
-              disabled={!messageText.trim() || sendMessage.isPending}
+              disabled={(!messageText.trim() && pastedLinks.length === 0) || sendMessage.isPending}
               data-testid="button-send"
             >
               {sendMessage.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 ml-0.5" />}
@@ -2240,12 +2544,11 @@ export default function GroupPage() {
       </div>
 
       {/* ── RIGHT: Travel Workspace ──
-           Desktop: flex-1 when locked (dominant), fixed width when planning
-           Mobile tab mode (mobileTab="plan"): full-width inline panel ── */}
+           Tablet+: side-by-side (md:block). Mobile: tab-switched ── */}
       <div className={cn(
-        "lg:block lg:h-full lg:overflow-hidden",
-        mobileTab === "plan" ? "block h-full flex-1" : "hidden",
-        isLocked ? "lg:flex-1" : "lg:w-96 xl:w-[420px]"
+        "md:block md:h-full md:overflow-hidden",
+        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
+        isLocked ? "md:flex-1" : "md:w-80 lg:w-96 xl:w-[420px]"
       )}>
         <TravelWorkspace
           groupId={group.id}
@@ -2256,11 +2559,12 @@ export default function GroupPage() {
           tabMode={mobileTab === "plan"}
           onShareSummary={shareTripSummary}
           allParticipants={group.participants ?? []}
+          onTripUpdate={refetchTrip}
         />
       </div>
 
       {/* ── Mobile Bottom Tab Bar ── */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur-md flex">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur-md flex pb-safe-bottom">
         <button
           className={cn(
             "flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",

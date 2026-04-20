@@ -114,6 +114,21 @@ export function useMyAttendance(groupId: number, participantId: number | null) {
   });
 }
 
+export function useAllAttendance(groupId: number) {
+  return useQuery<SupportSignal[]>({
+    queryKey: [api.tripAttendance.get.path, groupId, "all"],
+    queryFn: async () => {
+      const url = buildUrl(api.tripAttendance.get.path, { groupId });
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!groupId,
+    refetchInterval: 5000,
+    initialData: [],
+  });
+}
+
 export function usePinboard(groupId: number) {
   return useQuery<PinboardItem[]>({
     queryKey: [api.pinboard.list.path, groupId],

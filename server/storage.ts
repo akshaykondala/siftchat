@@ -1,10 +1,10 @@
 import { db } from "./db";
 import {
   groups, participants, messages, plans, planVotes,
-  tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems, bookingCommitments,
+  tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems, bookingCommitments, deviceTokens, users,
   type Group, type Participant, type Message, type Plan, type PlanVote,
   type TripPlan, type TripAlternative, type SupportSignal, type PipMessage, type PinboardItem,
-  type BookingCommitment, type CommitmentLevel,
+  type BookingCommitment, type CommitmentLevel, type DeviceToken,
 } from "@shared/schema";
 import { eq, desc, and, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
@@ -69,6 +69,12 @@ export interface IStorage {
   // Group management
   updateGroupName(groupId: number, name: string): Promise<Group>;
   deleteGroup(groupId: number): Promise<void>;
+
+  // Device tokens (push notifications)
+  saveDeviceToken(userId: number, token: string, platform: string): Promise<DeviceToken>;
+  getDeviceTokensByUserId(userId: number): Promise<string[]>;
+  getDeviceTokensByGroup(groupId: number): Promise<string[]>;
+  removeDeviceToken(userId: number, token: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -249,25 +255,15 @@ export class DatabaseStorage implements IStorage {
     commitmentLevel: CommitmentLevel,
     source: "ai" | "explicit"
   ): Promise<SupportSignal> {
-    // Only delete records of the SAME source — AI signals must not overwrite explicit user input
-    if (alternativeId === null) {
-      await db.delete(supportSignals).where(
-        and(
-          eq(supportSignals.groupId, groupId),
-          eq(supportSignals.participantId, participantId),
-          isNull(supportSignals.alternativeId),
-          eq(supportSignals.source, source)
-        )
-      );
+    // Explicit signals clear ALL existing rows (AI + explicit) for this slot — user choice wins.
+    // AI signals only clear previous AI rows — they must not overwrite an explicit user choice.
+    const whereClause = alternativeId === null
+      ? and(eq(supportSignals.groupId, groupId), eq(supportSignals.participantId, participantId), isNull(supportSignals.alternativeId))
+      : and(eq(supportSignals.groupId, groupId), eq(supportSignals.participantId, participantId), eq(supportSignals.alternativeId, alternativeId));
+    if (source === "explicit") {
+      await db.delete(supportSignals).where(whereClause);
     } else {
-      await db.delete(supportSignals).where(
-        and(
-          eq(supportSignals.groupId, groupId),
-          eq(supportSignals.participantId, participantId),
-          eq(supportSignals.alternativeId, alternativeId),
-          eq(supportSignals.source, source)
-        )
-      );
+      await db.delete(supportSignals).where(and(whereClause, eq(supportSignals.source, "ai")));
     }
     const [record] = await db
       .insert(supportSignals)
@@ -390,6 +386,48 @@ export class DatabaseStorage implements IStorage {
     await db.delete(messages).where(eq(messages.groupId, groupId));
     await db.delete(participants).where(eq(participants.groupId, groupId));
     await db.delete(groups).where(eq(groups.id, groupId));
+  }
+
+  // === DEVICE TOKEN METHODS ===
+
+  async saveDeviceToken(userId: number, token: string, platform: string): Promise<DeviceToken> {
+    // Upsert — if the token already exists just reactivate it
+    const existing = await db.select().from(deviceTokens).where(eq(deviceTokens.token, token));
+    if (existing.length > 0) {
+      const [updated] = await db.update(deviceTokens)
+        .set({ userId, platform, isActive: true })
+        .where(eq(deviceTokens.token, token))
+        .returning();
+      return updated;
+    }
+    const [record] = await db.insert(deviceTokens)
+      .values({ userId, token, platform, isActive: true })
+      .returning();
+    return record;
+  }
+
+  async getDeviceTokensByUserId(userId: number): Promise<string[]> {
+    const rows = await db.select({ token: deviceTokens.token })
+      .from(deviceTokens)
+      .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.isActive, true)));
+    return rows.map((r) => r.token);
+  }
+
+  async getDeviceTokensByGroup(groupId: number): Promise<string[]> {
+    // participants(groupId) → userId → device_tokens
+    const rows = await db
+      .select({ token: deviceTokens.token })
+      .from(participants)
+      .innerJoin(deviceTokens, eq(deviceTokens.userId, participants.userId))
+      .where(and(eq(participants.groupId, groupId), eq(deviceTokens.isActive, true)));
+    // Deduplicate in case a user is in the group multiple times
+    return Array.from(new Set(rows.map((r) => r.token)));
+  }
+
+  async removeDeviceToken(userId: number, token: string): Promise<void> {
+    await db.update(deviceTokens)
+      .set({ isActive: false })
+      .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.token, token)));
   }
 }
 

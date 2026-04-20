@@ -470,7 +470,7 @@ export default function Dashboard() {
                         radial-gradient(circle at 80% 80%, rgba(79,70,229,0.04) 0%, transparent 50%)`,
     }}>
       {/* Header */}
-      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-md border-b border-border/50 px-6 py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-md border-b border-border/50 px-6 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] flex items-center justify-between">
         <button
           onClick={() => setShowProfile(true)}
           className="flex items-center gap-3 hover:opacity-80 transition-opacity group"

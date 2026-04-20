@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, boolean, real } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, boolean, real, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -85,6 +85,10 @@ export const tripPlans = pgTable("trip_plans", {
   committedAttendeeNames: text("committed_attendee_names").array(),
   unresolvedQuestions: text("unresolved_questions").array(),
   winningAlternativeId: integer("winning_alternative_id"),
+  lastGuidedPhase: text("last_guided_phase"), // "kickoff"|"destination"|"dates"|"crew"|"flights"|"lodging"
+  lastNudgeAt: timestamp("last_nudge_at"),
+  flightDeadline: text("flight_deadline"), // ISO date string "YYYY-MM-DD"
+  lodgingDeadline: text("lodging_deadline"), // ISO date string "YYYY-MM-DD"
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -136,6 +140,16 @@ export const pipMessages = pgTable("pip_messages", {
   content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// Push notification device tokens — one row per device per user
+export const deviceTokens = pgTable("device_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  token: text("token").notNull().unique(),
+  platform: text("platform").notNull(), // "ios" | "android"
+  createdAt: timestamp("created_at").defaultNow(),
+  isActive: boolean("is_active").default(true),
+}, (t) => [index("idx_device_tokens_user_id").on(t.userId)]);
 
 // Pinboard items — activities/ideas added to the locked trip board
 export const pinboardItems = pgTable("pinboard_items", {
@@ -208,6 +222,7 @@ export type TripAlternative = typeof tripAlternatives.$inferSelect;
 export type SupportSignal = typeof supportSignals.$inferSelect;
 export type PipMessage = typeof pipMessages.$inferSelect;
 export type PinboardItem = typeof pinboardItems.$inferSelect;
+export type DeviceToken = typeof deviceTokens.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
 export type JoinGroupRequest = { name: string };

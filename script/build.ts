@@ -21,6 +21,7 @@ const allowlist = [
   "nanoid",
   "nodemailer",
   "openai",
+  "expo-server-sdk",
   "resend",
   "passport",
   "passport-local",

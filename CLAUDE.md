@@ -20,6 +20,9 @@ The problem isn't planning — it's commitment and accountability. When your fri
 | Priority | Item | Notes |
 |----------|------|-------|
 | P1 | Email Pip icon looks weird | The Pip SVG in the invite email header looks off — needs fixing |
+| P0 | Trip progress bar | 5-step visual bar in sidebar: Destination → Dates → Crew in → Flights → Lodging |
+| P0 | Pip-guided phases | Pip proactively moves group through planning phases with targeted messages |
+| P0 | Commitment nudge wall | If someone hasn't tapped "I'm in" after 24hrs, Pip calls them out by name |
 
 ---
 

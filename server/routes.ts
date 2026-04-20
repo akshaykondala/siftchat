@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
+import { sendPushNotifications, pipMessageToNotification } from "./notifications";
 import { z } from "zod";
 import { openai } from "./replit_integrations/audio/client";
 import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
@@ -20,7 +21,8 @@ function inferLodgingType(lodgingPreference: string | null | undefined): "hotel"
 
 // ============================================================
 //  AI ANALYSIS COOLDOWN
-//  Only re-analyze after 5 new messages OR 3 minutes, whichever comes first.
+//  Re-analyze every 3 new messages.
+//  Separately, after 15 min of silence, run phase/nudge check (no OpenAI call).
 // ============================================================
 
 interface AnalysisCooldown {
@@ -28,12 +30,32 @@ interface AnalysisCooldown {
   lastRunAt: number;
 }
 const analysisCooldowns = new Map<number, AnalysisCooldown>();
-const COOLDOWN_MIN_MS = 45 * 1000;
+const ANALYSIS_EVERY_N_MESSAGES = 3;
 
-function willAnalyze(groupId: number): boolean {
+// Per-group silence timers — fire phase/nudge check after 15min of no new messages
+const silenceTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const SILENCE_CHECK_MS = 15 * 60 * 1000;
+
+function scheduleSilenceCheck(groupId: number) {
+  const existing = silenceTimers.get(groupId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(async () => {
+    silenceTimers.delete(groupId);
+    try {
+      const participants = await storage.getParticipantsByGroup(groupId);
+      await runPhaseGuidance(groupId, participants);
+      await runCommitmentNudge(groupId, participants);
+    } catch (err) {
+      console.error("Silence check error:", err);
+    }
+  }, SILENCE_CHECK_MS);
+  silenceTimers.set(groupId, timer);
+}
+
+function willAnalyze(groupId: number, currentMessageCount: number): boolean {
   const cooldown = analysisCooldowns.get(groupId);
   if (!cooldown) return true;
-  return Date.now() - cooldown.lastRunAt >= COOLDOWN_MIN_MS;
+  return currentMessageCount - cooldown.lastMessageCount >= ANALYSIS_EVERY_N_MESSAGES;
 }
 
 // ============================================================
@@ -127,6 +149,7 @@ export async function registerRoutes(
         } catch { /* no-op */ }
       }
       const group = await storage.createGroup(input.name, createdByUserId);
+      await storage.createPipMessage(group.id, `Hey! I'm Pip 👋 I'll help you and your crew plan this trip — sorting destinations, flights, lodging, and keeping everyone accountable.\n\nTo get started: where are you thinking of going, and when?`);
       res.status(201).json(group);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -232,18 +255,20 @@ export async function registerRoutes(
       }
 
       const isPipMention = /@pip\b/i.test(input.content);
-      // Only show thinking bubble if there's enough chat context for Pip to respond
-      const existingMsgCount = await storage.getMessagesByGroup(groupId).then(m => m.length);
-      const hasEnoughContext = existingMsgCount >= 3;
-      const pipAnalyzing = isPipMention || (hasEnoughContext && willAnalyze(groupId));
+      const msgCount = await storage.getMessagesByGroup(groupId).then(m => m.length);
+      const shouldAnalyze = willAnalyze(groupId, msgCount);
+      const pipAnalyzing = isPipMention || shouldAnalyze;
+
+      // Reset silence timer on every message
+      scheduleSilenceCheck(groupId);
 
       if (isPipMention) {
         const question = input.content.replace(/@pip\b/gi, "").trim();
         setPipThinking(groupId);
         respondToPipMention(groupId, question || input.content).catch(err => console.error("Pip mention error:", err));
-      } else if (pipAnalyzing) {
+      } else if (shouldAnalyze) {
         setPipThinking(groupId);
-        analyzeTripChat(groupId).catch(err => console.error("Trip analysis error:", err));
+        analyzeTripChat(groupId, false, msgCount).catch(err => console.error("Trip analysis error:", err));
       }
 
       res.status(201).json({ ...message, pipAnalyzing });
@@ -643,8 +668,51 @@ export async function registerRoutes(
     const groupId = Number(req.params.groupId);
     const { participantId, flightBooked, lodgingStatus } = req.body;
     if (!participantId) return res.status(400).json({ message: "participantId required" });
-    const result = await storage.upsertCommitment(groupId, participantId, { flightBooked, lodgingStatus });
+    const patch: { flightBooked?: boolean; lodgingStatus?: string } = {};
+    if (flightBooked !== undefined) patch.flightBooked = flightBooked;
+    if (lodgingStatus !== undefined) patch.lodgingStatus = lodgingStatus;
+    const result = await storage.upsertCommitment(groupId, participantId, patch);
     res.json(result);
+  });
+
+  // === DEADLINES ===
+
+  app.post("/api/groups/:groupId/deadlines", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { flightDeadline, lodgingDeadline } = req.body;
+    const data: Record<string, string | null> = {};
+    if (flightDeadline !== undefined) data.flightDeadline = flightDeadline || null;
+    if (lodgingDeadline !== undefined) data.lodgingDeadline = lodgingDeadline || null;
+    const trip = await storage.upsertTripPlan(groupId, data as any);
+    res.json(trip);
+  });
+
+  // === DEVICE TOKENS (push notifications) ===
+
+  app.post(api.deviceTokens.register.path, authMiddleware, async (req, res) => {
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+    try {
+      const input = api.deviceTokens.register.input.parse(req.body);
+      await storage.saveDeviceToken(userId, input.token, input.platform);
+      res.json({ success: true });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
+      res.status(500).json({ message: "Failed to save device token" });
+    }
+  });
+
+  app.delete("/api/users/device-token/:token", authMiddleware, async (req, res) => {
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+    try {
+      await storage.removeDeviceToken(userId, req.params.token);
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ message: "Failed to remove device token" });
+    }
   });
 
   // === INVITE BY EMAIL ===
@@ -793,18 +861,83 @@ async function respondToPipMention(groupId: number, question: string): Promise<v
     return;
   }
 
-  // Detect finalize intent before going to the LLM
-  const finalizePattern = /\b(finalize|finalise|lock\s*(in|it|this)|book\s*(it|this)|confirm(ed)?|go\s*with\s*this|this\s*one|done deal)\b/i;
+  // ── Deadline detection ────────────────────────────────────────────────────
+  const deadlinePattern = /\b(set|add|create|update|change|push|move)\b.*\b(flight|lodging|hotel|airbnb)\b.*\b(deadline|book.?by|due.?date|by date)\b|\b(flight|lodging|hotel|airbnb)\b.*\b(deadline|book.?by|due.?date)\b.*\b(set|to|is|by)\b/i;
+  const isDeadlineIntent = deadlinePattern.test(question) || /deadline.*\b(flight|lodging)\b|\b(flight|lodging)\b.*deadline/i.test(question);
+
+  if (isDeadlineIntent) {
+    const isFlightDeadline = /\bflight(s)?\b/i.test(question);
+    const isLodgingDeadline = /\b(lodging|hotel|airbnb|vrbo|place|stay)\b/i.test(question);
+
+    // Parse natural language date from the question
+    function parseDeadlineDate(text: string): string | null {
+      const now = new Date();
+      const year = now.getFullYear();
+
+      // "end of may" / "end of june" etc.
+      const endOfMonth = text.match(/\bend\s+of\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b/i);
+      if (endOfMonth) {
+        const months = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+        const idx = months.indexOf(endOfMonth[1].toLowerCase());
+        const lastDay = new Date(year, idx + 1, 0).getDate();
+        return `${year}-${String(idx + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      }
+
+      // "May 15" / "June 30" / "March 1st"
+      const namedDate = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(st|nd|rd|th)?\b/i);
+      if (namedDate) {
+        const months = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+        const idx = months.indexOf(namedDate[1].toLowerCase());
+        const day = parseInt(namedDate[2]);
+        return `${year}-${String(idx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      }
+
+      // "5/15" / "05/31"
+      const slashDate = text.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+      if (slashDate) {
+        return `${year}-${String(slashDate[1]).padStart(2, "0")}-${String(slashDate[2]).padStart(2, "0")}`;
+      }
+
+      return null;
+    }
+
+    const deadlineDate = parseDeadlineDate(question);
+    if (deadlineDate) {
+      const patch: Record<string, string> = {};
+      if (isFlightDeadline && !isLodgingDeadline) patch.flightDeadline = deadlineDate;
+      else if (isLodgingDeadline && !isFlightDeadline) patch.lodgingDeadline = deadlineDate;
+      else { patch.flightDeadline = deadlineDate; patch.lodgingDeadline = deadlineDate; }
+
+      await storage.upsertTripPlan(groupId, patch as any);
+
+      const [month, day] = deadlineDate.split("-").slice(1).map(Number);
+      const formatted = new Date(Number(deadlineDate.split("-")[0]), month - 1, day)
+        .toLocaleDateString("en-US", { month: "long", day: "numeric" });
+      const what = patch.flightDeadline && patch.lodgingDeadline ? "flight and lodging deadlines"
+        : patch.flightDeadline ? "flight booking deadline"
+        : "lodging booking deadline";
+      await postPipMessage(groupId, `Done — ${what} set to ${formatted}. It's showing in the trip panel. I'll call people out if they haven't booked by then. ⏰`);
+      clearPipThinking(groupId);
+      return;
+    }
+  }
+
+  // Detect finalize/update intent before going to the LLM
+  const finalizePattern = /\b(finalize|finalise|lock\s*(in|it|this)|book\s*(it|this)|confirm(ed)?|go\s*with\s*this|this\s*one|done deal|change|switch|update|use\s*this)\b/i;
   const flightPattern = /\bflight(s)?\b/i;
-  const lodgingPattern = /\b(hotel|airbnb|vrbo|lodging|accommodation|place(s)?\s*to\s*stay|stay(ing)?)\b/i;
+  const lodgingPattern = /\b(hotel|airbnb|vrbo|lodging|accommodation|place(s)?\s*to\s*stay|stay(ing)?|booking\.com|booking)\b/i;
 
-  if (finalizePattern.test(question)) {
-    const isFlightFinalize = flightPattern.test(question) || (!lodgingPattern.test(question));
-    const isLodgingFinalize = lodgingPattern.test(question);
+  // Also detect any message that contains a lodging/flight URL with no need for keywords
+  const urlMatch = question.match(/https?:\/\/[^\s]+/);
+  const providedUrl = urlMatch ? urlMatch[0] : null;
+  const urlIsLodging = providedUrl && /airbnb|vrbo|booking\.com|hotels\.com/i.test(providedUrl);
+  const urlIsFlight = providedUrl && /google\.com\/travel\/flights|kayak\.com|skyscanner|expedia\.com\/Flights/i.test(providedUrl);
 
-    // Extract any URL included in the message
-    const urlMatch = question.match(/https?:\/\/[^\s]+/);
-    const providedUrl = urlMatch ? urlMatch[0] : null;
+  const hasIntent = finalizePattern.test(question) || urlIsLodging || urlIsFlight;
+
+  if (hasIntent) {
+    const isFlightFinalize = flightPattern.test(question) || urlIsFlight || (!lodgingPattern.test(question) && !urlIsLodging);
+    const isLodgingFinalize = lodgingPattern.test(question) || urlIsLodging;
 
     if (isFlightFinalize && !plan?.flightsBooked) {
       if (providedUrl) {
@@ -824,16 +957,30 @@ async function respondToPipMention(groupId: number, question: string): Promise<v
       }
       return;
     }
-    if (isLodgingFinalize && !(plan as any)?.lodgingBooked) {
+    if (isLodgingFinalize) {
       if (providedUrl) {
-        await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: providedUrl } as any);
-        await postPipMessage(groupId, `Lodging finalized! 🏠 I've saved the booking link — it's in the trip panel for everyone.`);
+        const inferredType = /airbnb|vrbo|rental|vacation/i.test(providedUrl) ? "rental" : /booking\.com|hotels\.com|hotel/i.test(providedUrl) ? "hotel" : null;
+        const alreadyBooked = !!(plan as any)?.lodgingBooked;
+        await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: providedUrl, ...(inferredType ? { lodgingType: inferredType } : {}) } as any);
+        const msg = alreadyBooked
+          ? `Updated! Switched lodging to the new link — it's saved in the trip panel. 🏠`
+          : `Lodging finalized! 🏠 I've saved the booking link — it's in the trip panel for everyone.`;
+        await postPipMessage(groupId, msg);
       } else {
         pendingFinalizationStore.set(groupId, 'lodging');
         await postPipMessage(groupId, `Got it! Drop the booking confirmation link here and I'll save it for everyone. 🏠`);
       }
       return;
     }
+  }
+
+  // ── Flight info query — skip LLM, just show the flight rec card ──────────
+  const isFlightInfoQuery = /\bflight(s)?\b/i.test(question) && !finalizePattern.test(question) && !providedUrl;
+  if (isFlightInfoQuery && plan?.destination && plan?.startDate && plan?.endDate) {
+    // Force analyzeTripChat to post the flight rec (bypasses cooldown, allows pip messages)
+    analyzeTripChat(groupId, true).catch(err => console.error("Flight info sync failed:", err));
+    clearPipThinking(groupId);
+    return;
   }
 
   // Build interleaved conversation history (user + Pip) sorted by timestamp, last 10 turns
@@ -875,8 +1022,15 @@ async function respondToPipMention(groupId: number, question: string): Promise<v
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
-  const systemPrompt = `You are Pip, a friendly AI travel planning assistant in a group chat. A user has directly asked you a question with @pip.
+  const systemPrompt = `You are Pip — a sharp, witty AI travel planning assistant living inside a group chat. You genuinely want this trip to happen and you're not afraid to nudge people.
 Today is ${today}.
+
+Your personality:
+- Direct and a little cheeky. You know travel well and you're not shy about it.
+- You use real urgency when it's warranted — flight prices, Airbnb availability, trip dates approaching. You're not alarmist but you're honest.
+- You reference people by name and remember what they said. Nothing goes unnoticed.
+- Short responses. You don't ramble. 1-3 sentences max.
+- You occasionally use dry humor. Not cringe, not forced — just natural.
 
 Trip context:
 ${tripContext}
@@ -889,9 +1043,7 @@ SCHEDULING RULES — apply these exactly when answering date/scheduling question
 - Always verify the day-of-week using today's date as a reference (e.g. if today is ${today}, count forward to find which dates fall on Fridays).
 - Name exact dates (e.g. "May 23–25" not "the last weekend of May"). Do not include URLs.
 
-The conversation history below shows what everyone said and what you (Pip) previously replied. Use it to give specific, contextual answers — reference people by name, acknowledge what you said before, and don't repeat suggestions you already made.
-
-Answer the user's question directly in 1-3 sentences. Be warm and specific.`;
+Use the conversation history to give specific, contextual answers — reference people by name, acknowledge what you said before, don't repeat suggestions.`;
 
   try {
     const response = await openai.chat.completions.create({
@@ -907,8 +1059,8 @@ Answer the user's question directly in 1-3 sentences. Be warm and specific.`;
     const answer = response.choices[0]?.message?.content?.trim();
     if (answer) {
       await postPipMessage(groupId, answer);
-      // Re-sync trip plan so dates/details Pip just mentioned are reflected immediately
-      analyzeTripChat(groupId, true).catch(err => console.error("Post-pip sync failed:", err));
+      // Re-sync trip plan so dates/details Pip just mentioned are reflected immediately (no extra pip messages)
+      analyzeTripChat(groupId, true, undefined, true).catch(err => console.error("Post-pip sync failed:", err));
     }
   } catch (err) {
     console.error("Pip mention response failed:", err);
@@ -1054,15 +1206,26 @@ async function handlePendingFinalization(groupId: number, type: 'flights' | 'lod
     } as any);
     await postPipMessage(groupId, `Flights finalized! ✈️ I've saved the link for everyone — tap "Flights" in the trip panel to access it.`);
   } else {
-    await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: url } as any);
+    const inferredType = /airbnb|vrbo|rental|vacation/i.test(url) ? "rental" : /booking\.com|hotels\.com|hotel/i.test(url) ? "hotel" : null;
+    await storage.upsertTripPlan(groupId, { lodgingBooked: true, finalizedLodgingUrl: url, ...(inferredType ? { lodgingType: inferredType } : {}) } as any);
     await postPipMessage(groupId, `Lodging finalized! 🏠 I've saved the booking link — it's in the trip panel for everyone.`);
   }
 }
 
-// Wrapper so every pip post auto-clears the thinking indicator
+// Wrapper so every pip post auto-clears the thinking indicator and fires push notifications
 async function postPipMessage(groupId: number, content: string) {
   await storage.createPipMessage(groupId, content);
   clearPipThinking(groupId);
+
+  // Push notifications — fire and forget, never block or throw
+  Promise.all([
+    storage.getDeviceTokensByGroup(groupId),
+    storage.getGroupById(groupId),
+  ]).then(([tokens, group]) => {
+    if (tokens.length === 0) return;
+    const payload = pipMessageToNotification(content, group?.name ?? "");
+    return sendPushNotifications(tokens, payload);
+  }).catch(err => console.error("Push notification error (group %d):", groupId, err));
 }
 
 // ============================================================
@@ -1156,7 +1319,7 @@ function buildTripUrls(
 //  TRAVEL AI PIPELINE
 // ============================================================
 
-async function analyzeTripChat(groupId: number, bypassCooldown = false): Promise<void> {
+async function analyzeTripChat(groupId: number, bypassCooldown = false, knownMsgCount?: number, skipAllPipMessages = false): Promise<void> {
   // Capture state BEFORE AI analysis for material-change comparison
   const [previousPlan, previousAlts, previousPipMsgs] = await Promise.all([
     storage.getTripPlanByGroup(groupId),
@@ -1167,14 +1330,9 @@ async function analyzeTripChat(groupId: number, bypassCooldown = false): Promise
   const msgs = await storage.getMessagesByGroup(groupId);
   if (msgs.length === 0) return;
 
-  // Cooldown check (skipped when bypassCooldown=true, e.g. after @pip response)
-  const cooldown = analysisCooldowns.get(groupId);
-  const now = Date.now();
-  if (!bypassCooldown && cooldown) {
-    const elapsed = now - cooldown.lastRunAt;
-    if (elapsed < COOLDOWN_MIN_MS) return;
-  }
-  analysisCooldowns.set(groupId, { lastMessageCount: msgs.length, lastRunAt: now });
+  // Record cooldown by message count so willAnalyze() can compare next time
+  const msgCount = knownMsgCount ?? msgs.length;
+  analysisCooldowns.set(groupId, { lastMessageCount: msgCount, lastRunAt: Date.now() });
 
   const participantsList = await storage.getParticipantsByGroup(groupId);
   const participantNames = participantsList.map(p => p.name);
@@ -1246,7 +1404,7 @@ RULES:
 3. attendanceSignals — use exact member names from the list provided. "committed" = "book me in", "I'm in", "definitely"; "likely" = "planning to", "should be able to"; "interested" = "down for", "sounds fun", "maybe"; "unavailable" = "can't make it", "working that day", "won't be there".
 4. conflictDetected: set true if ANY message in the chat proposes dates/months that ANOTHER participant has explicitly said they cannot do. This overrides all other conditions — if conflictDetected=true you MUST set shouldPipSpeak=true. Examples: someone says "I'm busy in June" and later anyone suggests June dates; someone says "I can't do July" and then July is proposed. Scan ALL messages — the unavailability and the conflict proposal do not have to be adjacent.
 5. shouldPipSpeak = true when ANY of these apply: conflictDetected=true, a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck (same topic debated 4+ times with no progress), one clarifying question would unblock everything, all three key details are known for the first time. NOT after routine messages where nothing important changed.
-5b. pipMessage: warm but direct, max 2 sentences. For conflicts, ALWAYS name the person and the month/date explicitly (e.g. "Heads up — Akshay said he's busy in June, so those dates won't work for him. Want to look at a different month?"). For stalemates, be proactive: "You've been going back and forth on [topic] — want me to suggest [specific resolution]?" null if shouldPipSpeak is false.
+5b. pipMessage: direct, sharp, max 2 sentences. Pip has personality — a little cheeky, not a pushover. For conflicts, name the person and date explicitly ("Akshay said he's out in June — those dates don't work for him. Pick a different month?"). For stalemates: "You've been going back and forth on [topic] for a while — want me to just pick?" For decisions: add real urgency where relevant ("flights get more expensive every day you wait", "Airbnbs in [dest] go fast for groups"). null if shouldPipSpeak is false.
 6. unresolvedQuestions: list only genuinely open questions (budget disagreements, unconfirmed dates, missing attendee commitment, etc.).
 7. If fewer than 3 messages or no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.
 8. flightsBooked and lodgingBooked are NEVER set by AI — only via explicit @pip finalize. Do not include these fields.
@@ -1447,6 +1605,8 @@ RULES:
   }
 
   // Pip posting: trust AI shouldPipSpeak + enforce anti-spam cooldown + backend conditions
+  if (skipAllPipMessages) return;
+
   if (pipMessage) {
     const newPlan = await storage.getTripPlanByGroup(groupId);
     const newAlts = await storage.getTripAlternativesByGroup(groupId);
@@ -1535,6 +1695,189 @@ RULES:
       await storage.upsertTripPlan(groupId, { lastLodgingRecoKey: currentLodgingKey } as any);
     }
   }
+
+  // ── Pip-guided phases ──────────────────────────────────────────────────────
+  // Send one targeted message per phase transition. Uses lastGuidedPhase as dedup key.
+  await runPhaseGuidance(groupId, participantsList);
+
+  // ── Commitment nudge ──────────────────────────────────────────────────────
+  await runCommitmentNudge(groupId, participantsList);
+}
+
+// ============================================================
+//  PIP-GUIDED PHASES
+// ============================================================
+
+type GuidedPhase = "kickoff" | "destination" | "dates" | "deadlines" | "crew" | "flights" | "lodging" | "locked";
+
+async function runPhaseGuidance(groupId: number, participantsList: { id: number; name: string }[]): Promise<void> {
+  const trip = await storage.getTripPlanByGroup(groupId);
+  if (!trip) return;
+
+  // Don't guide locked trips
+  if (trip.status === "Trip locked") return;
+
+  const lastPhase = trip.lastGuidedPhase as GuidedPhase | null;
+
+  const hasDeadlines = !!(trip as any).flightDeadline || !!(trip as any).lodgingDeadline;
+
+  // Determine current phase based on what's been set
+  let currentPhase: GuidedPhase;
+  if (!trip.destination) {
+    currentPhase = "kickoff";
+  } else if (!trip.startDate && !trip.endDate) {
+    currentPhase = "destination";
+  } else if (!hasDeadlines && lastPhase !== "deadlines") {
+    // Nudge for deadlines right after dates are confirmed, but only once
+    currentPhase = "deadlines";
+  } else {
+    // Check crew commitment
+    const commitments = await storage.getCommitments(groupId);
+    const committedCount = commitments.filter(c => c.flightBooked).length;
+    if (committedCount < participantsList.length && participantsList.length > 0) {
+      currentPhase = "dates";
+    } else if (!trip.flightsBooked) {
+      currentPhase = "crew";
+    } else if (!trip.lodgingBooked) {
+      currentPhase = "flights";
+    } else {
+      currentPhase = "lodging";
+    }
+  }
+
+  // Only fire if we've moved to a new phase
+  if (lastPhase === currentPhase) return;
+
+  const dest = trip.destination ?? "there";
+  const dates = [trip.startDate, trip.endDate].filter(Boolean).join(" → ");
+
+  const phaseMessages: Record<GuidedPhase, string | null> = {
+    kickoff: "Hey crew! Drop your ideas — where are you thinking? Once you pick a spot I can pull up flights and places to stay. 🌍",
+    destination: `${dest} — solid pick. When are you going? Dates are the one thing that actually unblocks everything else. Sooner you lock them in, cheaper the flights.`,
+    deadlines: `${dates} locked in — nice. One thing that actually makes trips happen: set a "book by" date for flights. Just say @pip set flight deadline [date] or tap the deadline card in the trip panel. Without a hard date, people procrastinate forever. ⏰`,
+    dates: `Good — who's actually in? Tap your status on the right 👉 Flight prices only go up from here, so get everyone committed before someone bails.`,
+    crew: `Everyone's in! Book flights now while prices are still reasonable — they creep up every day you wait. Drop a link or tell me what you're seeing and I'll help. ✈️`,
+    flights: `Flights sorted ✈️ Now lock in where you're staying — good ${(trip as any).lodgingType === "hotel" ? "hotels" : "Airbnbs"} in ${dest} get snapped up fast, especially for groups. Drop a link and I'll save it for everyone.`,
+    lodging: `Everything's booked — this trip is actually happening 🎉 Hit "Lock this trip" to make it official and stop anyone from backing out.`,
+    locked: null,
+  };
+
+  const msg = phaseMessages[currentPhase];
+  if (msg) {
+    await postPipMessage(groupId, msg);
+    await storage.upsertTripPlan(groupId, { lastGuidedPhase: currentPhase } as any);
+  }
+}
+
+// ============================================================
+//  COMMITMENT NUDGE
+// ============================================================
+
+async function runCommitmentNudge(groupId: number, participantsList: { id: number; name: string }[]): Promise<void> {
+  if (participantsList.length === 0) return;
+
+  const trip = await storage.getTripPlanByGroup(groupId);
+  if (!trip) return;
+
+  if (trip.status === "Trip locked") return;
+
+  // Throttle: only nudge once every 24 hours
+  if (trip.lastNudgeAt) {
+    const hoursSince = (Date.now() - new Date(trip.lastNudgeAt).getTime()) / (1000 * 60 * 60);
+    if (hoursSince < 24) return;
+  }
+
+  const commitments = await storage.getCommitments(groupId);
+  const flightCommittedIds = new Set(commitments.filter(c => c.flightBooked).map(c => c.participantId));
+  const lodgingCommittedIds = new Set(
+    commitments.filter(c => c.lodgingStatus === "booked" || c.lodgingStatus === "covered").map(c => c.participantId)
+  );
+
+  const now = Date.now();
+  const dest = trip.destination ?? "your destination";
+
+  function daysUntil(dateStr: string): number {
+    return (new Date(dateStr + "T00:00:00").getTime() - now) / (1000 * 60 * 60 * 24);
+  }
+  function hoursUntil(dateStr: string): number {
+    return (new Date(dateStr + "T23:59:59").getTime() - now) / (1000 * 60 * 60);
+  }
+
+  const tripDaysOut = trip.startDate ? daysUntil(trip.startDate) : null;
+  const flightDeadlineStr = (trip as any).flightDeadline as string | null;
+  const lodgingDeadlineStr = (trip as any).lodgingDeadline as string | null;
+
+  const unconfirmedFlights = participantsList.filter(p => !flightCommittedIds.has(p.id));
+  const unconfirmedLodging = participantsList.filter(p => !lodgingCommittedIds.has(p.id));
+
+  let nudge: string | null = null;
+
+  // ── Deadline breach (highest priority) ────────────────────────────────────
+  if (flightDeadlineStr && !trip.flightsBooked && unconfirmedFlights.length > 0) {
+    const hrs = hoursUntil(flightDeadlineStr);
+    if (hrs > 0 && hrs <= 48) {
+      const names = unconfirmedFlights.map(p => p.name).join(", ");
+      nudge = hrs <= 12
+        ? `🚨 Flight deadline is in ${Math.round(hrs)}h. ${names} — this is the last call. Book now or you're finding your own way there.`
+        : `⏰ Flight booking deadline is tomorrow. ${names} still haven't confirmed. Prices only get worse from here.`;
+    }
+  }
+
+  if (!nudge && lodgingDeadlineStr && !trip.lodgingBooked && unconfirmedLodging.length > 0) {
+    const hrs = hoursUntil(lodgingDeadlineStr);
+    if (hrs > 0 && hrs <= 48) {
+      const names = unconfirmedLodging.map(p => p.name).join(", ");
+      nudge = hrs <= 12
+        ? `🚨 Lodging deadline in ${Math.round(hrs)}h. ${names} — someone needs to book this or we're all sleeping in the car.`
+        : `⏰ Lodging deadline is tomorrow. ${names} still haven't confirmed. Good places in ${dest} won't last.`;
+    }
+  }
+
+  // ── Trip proximity urgency ─────────────────────────────────────────────────
+  if (!nudge && tripDaysOut !== null && !trip.flightsBooked && unconfirmedFlights.length > 0) {
+    const names = unconfirmedFlights.map(p => p.name);
+    const nameStr = names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + ` and ${names[names.length - 1]}`;
+
+    if (tripDaysOut <= 7) {
+      nudge = `One week out and ${nameStr} still ${names.length === 1 ? "hasn't" : "haven't"} booked a flight. At this point prices are painful — just bite the bullet and book it.`;
+    } else if (tripDaysOut <= 14) {
+      nudge = `Two weeks to ${dest} and ${nameStr} ${names.length === 1 ? "is" : "are"} still unbooked. Flights get significantly more expensive inside two weeks — don't say I didn't warn you. ✈️`;
+    } else if (tripDaysOut <= 30) {
+      nudge = `${dest} is one month away. Friendly reminder that flight prices creep up every day — ${nameStr} should lock something in soon. ✈️`;
+    } else if (tripDaysOut <= 45 && names.length > 0) {
+      nudge = `45 days out is actually the sweet spot for booking flights to ${dest}. ${nameStr} — now's a good time before prices tick up.`;
+    }
+  }
+
+  // ── Lodging urgency ────────────────────────────────────────────────────────
+  if (!nudge && tripDaysOut !== null && !trip.lodgingBooked && unconfirmedLodging.length > 0 && trip.flightsBooked) {
+    if (tripDaysOut <= 14) {
+      nudge = `Flights are sorted but lodging in ${dest} isn't confirmed yet. Two weeks out, the good options are going fast — someone needs to pull the trigger on this. 🏠`;
+    } else if (tripDaysOut <= 30) {
+      nudge = `Flights done, lodging still open. Popular spots in ${dest} get fully booked a month out — worth locking something in soon.`;
+    }
+  }
+
+  // ── Social pressure fallback ────────────────────────────────────────────────
+  if (!nudge && trip.startDate && unconfirmedFlights.length > 0) {
+    const names = unconfirmedFlights.map(p => p.name);
+    if (participantsList.length - names.length > 0 && names.length === 1) {
+      // Everyone else is booked, one person isn't
+      const booked = participantsList.filter(p => flightCommittedIds.has(p.id)).map(p => p.name);
+      nudge = `${booked.join(", ")} ${booked.length === 1 ? "has" : "have"} all confirmed flights. ${names[0]} — you're the last one. Don't be the reason this trip falls apart. 👀`;
+    } else if (names.length === 1) {
+      nudge = `Hey ${names[0]} — have you sorted your flight yet? Everyone's watching the commitment cards. 👆`;
+    } else if (names.length === 2) {
+      nudge = `${names[0]} and ${names[1]} — flights aren't going to book themselves. Every day you wait, prices go up a little more. ✈️`;
+    } else {
+      nudge = `Still waiting on ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} to sort flights. The longer you wait, the more you'll pay.`;
+    }
+  }
+
+  if (!nudge) return;
+
+  await postPipMessage(groupId, nudge);
+  await storage.upsertTripPlan(groupId, { lastNudgeAt: new Date() } as any);
 }
 
 // ============================================================

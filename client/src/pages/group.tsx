@@ -18,7 +18,7 @@ import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
   BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
-  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map, Compass, Mail, X,
+  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map as MapIcon, Compass, Mail, X,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
 import { PipAvatar } from "@/components/pip-avatar";
@@ -167,7 +167,7 @@ function TripCard({ trip, winnerAlt }: { trip: TripPlan | null; winnerAlt?: Trip
     return (
       <div className="rounded-2xl border border-primary/10 bg-gradient-to-br from-violet-50/60 to-indigo-50/60 dark:from-violet-950/20 dark:to-indigo-950/20 p-5">
         <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/50 gap-3">
-          <Map className="w-8 h-8 opacity-40" />
+          <MapIcon className="w-8 h-8 opacity-40" />
           <p className="text-sm text-center">Start chatting — Pip will detect your trip details automatically.</p>
         </div>
       </div>
@@ -2280,7 +2280,7 @@ export default function GroupPage() {
           onClick={() => setMobileTab("plan")}
           data-testid="tab-plan"
         >
-          <Map className="w-5 h-5" />
+          <MapIcon className="w-5 h-5" />
           Trip Plan
           {trip?.status && trip.status !== "Early ideas" && (
             <span className="absolute top-2 right-6 w-2 h-2 bg-primary rounded-full" />

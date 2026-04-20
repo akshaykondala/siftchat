@@ -19,7 +19,7 @@ The problem isn't planning — it's commitment and accountability. When your fri
 
 | Priority | Item | Notes |
 |----------|------|-------|
-| P0 | Trip delete not working | ⋯ menu delete on dashboard scrapbook cards is broken — needs investigation |
+| P1 | Email Pip icon looks weird | The Pip SVG in the invite email header looks off — needs fixing |
 
 ---
 

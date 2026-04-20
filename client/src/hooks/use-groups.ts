@@ -22,9 +22,13 @@ export function useCreateGroup() {
   return useMutation({
     mutationFn: async (data: CreateGroupRequest) => {
       const validated = api.groups.create.input.parse(data);
+      const token = localStorage.getItem("siftchat_token");
       const res = await fetch(api.groups.create.path, {
         method: api.groups.create.method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(validated),
       });
       

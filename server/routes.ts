@@ -789,10 +789,16 @@ export async function registerRoutes(
 
   app.get("/api/users/me/trips", authMiddleware, async (req, res) => {
     const userId = (req as any).userId;
-    // Find all participant rows for this user
-    const myParticipants = await db.select().from(participants).where(eq(participants.userId, userId));
-    if (myParticipants.length === 0) return res.json([]);
-    const groupIds = Array.from(new Set(myParticipants.map(p => p.groupId)));
+    // Collect group IDs from two sources: participant linkage + direct creator
+    const [myParticipants, createdGroups] = await Promise.all([
+      db.select({ groupId: participants.groupId }).from(participants).where(eq(participants.userId, userId)),
+      db.select({ id: groups.id }).from(groups).where(eq(groups.createdByUserId, userId)),
+    ]);
+    const groupIds = Array.from(new Set([
+      ...myParticipants.map(p => p.groupId),
+      ...createdGroups.map(g => g.id),
+    ]));
+    if (groupIds.length === 0) return res.json([]);
     // Fetch groups + trip plans in parallel
     const [allGroups, allPlans] = await Promise.all([
       db.select().from(groups).where(inArray(groups.id, groupIds)),

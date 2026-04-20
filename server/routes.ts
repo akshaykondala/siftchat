@@ -708,7 +708,11 @@ export async function registerRoutes(
     const userId = (req as any).userId;
     const group = await storage.getGroupById(groupId);
     if (!group) return res.status(404).json({ message: "Group not found" });
-    if (group.createdByUserId !== userId) return res.status(403).json({ message: "Not authorized" });
+    // Allow if creator, or if createdByUserId is null (legacy group) and user is a participant
+    const isCreator = group.createdByUserId === userId;
+    const allParticipants = await storage.getParticipantsByGroup(groupId);
+    const isParticipant = allParticipants.some(p => p.userId === userId);
+    if (!isCreator && !isParticipant) return res.status(403).json({ message: "Not authorized" });
     await storage.deleteGroup(groupId);
     res.json({ ok: true });
   });

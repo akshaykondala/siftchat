@@ -19,7 +19,7 @@ The problem isn't planning — it's commitment and accountability. When your fri
 
 | Priority | Item | Notes |
 |----------|------|-------|
-| P1 | Email invites not working on prod | RESEND_API_KEY set but still returning "not configured" — check Railway deploy logs after latest push |
+| P0 | Trip delete not working | ⋯ menu delete on dashboard scrapbook cards is broken — needs investigation |
 
 ---
 

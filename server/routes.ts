@@ -668,6 +668,7 @@ export async function registerRoutes(
     const slug = group.shareLinkSlug;
 
     if (!process.env.RESEND_API_KEY) {
+      console.error("RESEND_API_KEY is not set in environment");
       return res.status(503).json({ message: "Email not configured on this server." });
     }
 
@@ -677,6 +678,10 @@ export async function registerRoutes(
         sendTripInvite({ toEmail: email.trim(), inviterName, tripName, slug })
       )
     );
+
+    results.forEach((r, i) => {
+      if (r.status === "rejected") console.error(`Invite to ${emails[i]} failed:`, r.reason);
+    });
 
     const failed = results.filter(r => r.status === "rejected").length;
     if (failed === emails.length) return res.status(500).json({ message: "Failed to send invites." });

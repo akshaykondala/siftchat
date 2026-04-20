@@ -61,6 +61,10 @@ export interface IStorage {
   getPinboardItems(groupId: number): Promise<PinboardItem[]>;
   addPinboardItem(groupId: number, title: string, emoji: string, category: string, addedByName: string): Promise<PinboardItem>;
   removePinboardItem(id: number): Promise<void>;
+
+  // Group management
+  updateGroupName(groupId: number, name: string): Promise<Group>;
+  deleteGroup(groupId: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -342,6 +346,22 @@ export class DatabaseStorage implements IStorage {
 
   async removePinboardItem(id: number): Promise<void> {
     await db.delete(pinboardItems).where(eq(pinboardItems.id, id));
+  }
+
+  async updateGroupName(groupId: number, name: string): Promise<Group> {
+    const [group] = await db.update(groups).set({ name }).where(eq(groups.id, groupId)).returning();
+    return group;
+  }
+
+  async deleteGroup(groupId: number): Promise<void> {
+    await db.delete(pinboardItems).where(eq(pinboardItems.groupId, groupId));
+    await db.delete(pipMessages).where(eq(pipMessages.groupId, groupId));
+    await db.delete(supportSignals).where(eq(supportSignals.groupId, groupId));
+    await db.delete(tripAlternatives).where(eq(tripAlternatives.groupId, groupId));
+    await db.delete(tripPlans).where(eq(tripPlans.groupId, groupId));
+    await db.delete(messages).where(eq(messages.groupId, groupId));
+    await db.delete(participants).where(eq(participants.groupId, groupId));
+    await db.delete(groups).where(eq(groups.id, groupId));
   }
 }
 

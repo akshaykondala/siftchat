@@ -623,6 +623,43 @@ export async function registerRoutes(
     res.json({ id: updated.id, email: updated.email, name: updated.name, avatarUrl: updated.avatarUrl });
   });
 
+  // === INVITE BY EMAIL ===
+
+  app.post("/api/groups/:groupId/invite", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const userId = (req as any).userId;
+    const { emails } = req.body;
+
+    if (!Array.isArray(emails) || emails.length === 0)
+      return res.status(400).json({ message: "At least one email required" });
+    if (emails.length > 10)
+      return res.status(400).json({ message: "Max 10 invites at a time" });
+
+    const group = await storage.getGroupById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+
+    const [inviter] = await db.select().from(users).where(eq(users.id, userId));
+    const inviterName = inviter?.name || "Someone";
+    const tripName = group.name;
+    const slug = group.shareLinkSlug;
+
+    if (!process.env.RESEND_API_KEY) {
+      return res.status(503).json({ message: "Email not configured on this server." });
+    }
+
+    const { sendTripInvite } = await import("./email");
+    const results = await Promise.allSettled(
+      emails.map((email: string) =>
+        sendTripInvite({ toEmail: email.trim(), inviterName, tripName, slug })
+      )
+    );
+
+    const failed = results.filter(r => r.status === "rejected").length;
+    if (failed === emails.length) return res.status(500).json({ message: "Failed to send invites." });
+
+    res.json({ sent: emails.length - failed, failed });
+  });
+
   // === GROUP MANAGEMENT ===
 
   app.patch("/api/groups/:groupId/name", authMiddleware, async (req, res) => {

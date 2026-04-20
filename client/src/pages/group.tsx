@@ -18,7 +18,7 @@ import {
   Send, Sparkles, Copy, Share2, Loader2, MapPin, Calendar,
   BedDouble, TrendingUp, CheckCircle2, HelpCircle,
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
-  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map, Compass,
+  Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map, Compass, Mail, X,
 } from "lucide-react";
 import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
 import { PipAvatar } from "@/components/pip-avatar";
@@ -1699,6 +1699,9 @@ export default function GroupPage() {
   const [participantId, setParticipantId] = useState<number | null>(null);
   const [forceShowJoin, setForceShowJoin] = useState(false);
   const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmails, setInviteEmails] = useState("");
+  const [inviteSending, setInviteSending] = useState(false);
   const prevPipCountRef = useRef(0);
   const prevMsgCountRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1728,6 +1731,30 @@ export default function GroupPage() {
   const copyLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}/g/${slug}`);
     toast({ title: "Link Copied!", description: "Share it with your crew." });
+  };
+
+  const sendInvites = async () => {
+    if (!group) return;
+    const emails = inviteEmails.split(/[\s,;]+/).map(e => e.trim()).filter(e => e.includes("@"));
+    if (emails.length === 0) return;
+    setInviteSending(true);
+    try {
+      const token = localStorage.getItem("siftchat_token");
+      const res = await fetch(`/api/groups/${group.id}/invite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ emails }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast({ title: "Error", description: data.message, variant: "destructive" }); return; }
+      toast({ title: `Invite${data.sent !== 1 ? "s" : ""} sent!`, description: `${data.sent} email${data.sent !== 1 ? "s" : ""} sent.` });
+      setInviteEmails("");
+      setShowInvite(false);
+    } catch {
+      toast({ title: "Failed to send", description: "Check your connection.", variant: "destructive" });
+    } finally {
+      setInviteSending(false);
+    }
   };
 
   const shareTripSummary = () => {
@@ -1937,6 +1964,15 @@ export default function GroupPage() {
             <Button
               variant="outline"
               size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={() => setShowInvite(true)}
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Invite</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               className="h-8 text-xs"
               onClick={copyLink}
               data-testid="button-copy-link-header"
@@ -2062,6 +2098,56 @@ export default function GroupPage() {
           )}
         </button>
       </div>
+
+      {/* Invite Modal */}
+      <AnimatePresence>
+        {showInvite && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowInvite(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              transition={{ type: "spring", duration: 0.3 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-card border border-border rounded-3xl p-6 w-full max-w-sm shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-black">Invite friends</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">They'll get an email with a join link.</p>
+                </div>
+                <button onClick={() => setShowInvite(false)} className="text-muted-foreground hover:text-foreground transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <textarea
+                className="w-full rounded-2xl bg-secondary/40 border border-border/60 p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/60 min-h-[90px]"
+                placeholder="friend@gmail.com, another@gmail.com"
+                value={inviteEmails}
+                onChange={e => setInviteEmails(e.target.value)}
+                autoFocus
+              />
+              <p className="text-[11px] text-muted-foreground mt-1.5 mb-4">Separate multiple emails with commas or spaces.</p>
+
+              <Button
+                className="w-full rounded-2xl font-semibold h-11"
+                onClick={sendInvites}
+                disabled={inviteSending || !inviteEmails.trim()}
+                isLoading={inviteSending}
+              >
+                <Mail className="w-4 h-4 mr-2" /> Send Invites
+              </Button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

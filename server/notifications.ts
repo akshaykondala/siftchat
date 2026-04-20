@@ -1,4 +1,4 @@
-import Expo, { type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
+import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
 
 const expo = new Expo({
   accessToken: process.env.EXPO_ACCESS_TOKEN,

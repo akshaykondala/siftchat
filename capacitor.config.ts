@@ -16,7 +16,7 @@ const config: CapacitorConfig = {
     },
   },
   ios: {
-    contentInset: "always",
+    contentInset: "never",
   },
 };
 

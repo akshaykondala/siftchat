@@ -2115,7 +2115,7 @@ function UserMessage({ content, name, isMe, time }: { content: string; name: str
     >
       {!isMe && <span className="text-xs font-semibold text-muted-foreground mb-1">{name}</span>}
       <div className={cn(
-        "px-4 py-2 rounded-2xl text-sm shadow-sm leading-relaxed break-all",
+        "px-4 py-2.5 rounded-2xl text-sm shadow-sm leading-relaxed break-words min-w-[3rem]",
         isMe
           ? "bg-primary text-primary-foreground rounded-tr-none"
           : "bg-white dark:bg-zinc-800 border rounded-tl-none"
@@ -2385,7 +2385,7 @@ export default function GroupPage() {
         isLocked ? "md:w-80 lg:w-96" : "flex-1"
       )}>
         {/* Header */}
-        <header className="min-h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0 pb-4 pt-[calc(1.25rem+env(safe-area-inset-top))]">
+        <header className="min-h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0 pb-4 pt-[calc(1.5rem+env(safe-area-inset-top))]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <button
               onClick={() => setLocation("/")}

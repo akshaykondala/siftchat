@@ -2480,7 +2480,8 @@ export default function GroupPage() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-3" data-testid="messages-container">
+        <div className="flex-1 overflow-y-auto scrollbar-hide" data-testid="messages-container">
+          <div className="flex flex-col min-h-full justify-end p-4 space-y-3">
           <div className="text-center text-xs text-muted-foreground my-4">
             Group created {format(new Date(group.createdAt ?? new Date()), "MMM d, yyyy")}
           </div>
@@ -2507,6 +2508,7 @@ export default function GroupPage() {
             {pipIsThinking && <PipThinkingBubble key="pip-thinking" />}
           </AnimatePresence>
           <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Typing indicator */}

@@ -14,7 +14,7 @@ export const PIP_SPEECHES = [
 
 function Eye({ blink, happy, px, py }: { blink: boolean; happy: boolean; px: number; py: number }) {
   return (
-    <div className="relative w-5 h-5 rounded-full bg-white overflow-hidden flex items-center justify-center">
+    <div className="relative w-6 h-6 rounded-full bg-white overflow-hidden flex items-center justify-center shadow-inner">
       <AnimatePresence mode="wait">
         {happy ? (
           <motion.div
@@ -25,8 +25,8 @@ function Eye({ blink, happy, px, py }: { blink: boolean; happy: boolean; px: num
             transition={{ duration: 0.1 }}
             className="absolute inset-0 flex items-center justify-center"
           >
-            <svg width="14" height="8" viewBox="0 0 14 8" fill="none">
-              <path d="M1 7 Q7 1 13 7" stroke="#312e81" strokeWidth="2.2" strokeLinecap="round" />
+            <svg width="16" height="9" viewBox="0 0 16 9" fill="none">
+              <path d="M1 8 Q8 1 15 8" stroke="#7c3aed" strokeWidth="2.5" strokeLinecap="round" />
             </svg>
           </motion.div>
         ) : (
@@ -43,12 +43,12 @@ function Eye({ blink, happy, px, py }: { blink: boolean; happy: boolean; px: num
               className="absolute inset-0 flex items-center justify-center"
             >
               <motion.div
-                className="relative w-3 h-3 rounded-full bg-indigo-900"
+                className="relative w-[14px] h-[14px] rounded-full bg-violet-500"
                 animate={{ x: px, y: py }}
                 transition={{ type: "spring", stiffness: 400, damping: 25, mass: 0.5 }}
               >
-                <div className="absolute inset-0.5 rounded-full bg-indigo-950" />
-                <div className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full bg-white/80" />
+                <div className="absolute inset-[3px] rounded-full bg-violet-800" />
+                <div className="absolute top-[2px] right-[2px] w-[4px] h-[4px] rounded-full bg-white/90" />
               </motion.div>
             </motion.div>
           </motion.div>
@@ -149,40 +149,58 @@ export function PipCharacter({ speeches = PIP_SPEECHES }: { speeches?: string[] 
         className="cursor-pointer select-none"
         aria-label="Click Pip"
       >
+        {/* Bob up/down + gentle sway — two independent cycles so it never feels mechanical */}
         <motion.div
-          animate={{ y: [0, -5, 0] }}
+          animate={{ y: [0, -6, 0] }}
           transition={{ duration: 3.8, repeat: Infinity, ease: "easeInOut" }}
         >
-          <div className="relative" style={{ width: 80, height: 96 }}>
-            <div className="absolute inset-4 rounded-2xl bg-violet-400/20 blur-2xl" />
-            <div
-              className="absolute left-1/2 -translate-x-1/2 border-2 border-indigo-300 rounded-t-full bg-transparent"
-              style={{ top: 0, width: 28, height: 14 }}
-            />
-            <div
-              className="absolute left-0 right-0 rounded-2xl bg-gradient-to-b from-violet-400 to-indigo-500 shadow-lg"
-              style={{ top: 10, bottom: 6 }}
-            >
-              <div className="absolute left-0 right-0 flex justify-center gap-4" style={{ top: 16 }}>
-                <Eye blink={blink} happy={happy} px={pupil.x} py={pupil.y} />
-                <Eye blink={blink} happy={happy} px={pupil.x} py={pupil.y} />
+          <motion.div
+            animate={{ rotate: [0, 1.8, 0, -1.8, 0] }}
+            transition={{ duration: 5.5, repeat: Infinity, ease: "easeInOut" }}
+          >
+            <div className="relative" style={{ width: 80, height: 96 }}>
+              {/* Ambient glow */}
+              <div className="absolute inset-4 rounded-3xl bg-violet-300/25 blur-2xl" />
+
+              {/* Antenna — ball on a stick */}
+              <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center" style={{ top: -5 }}>
+                <div className="w-3 h-3 rounded-full bg-violet-200 shadow-sm border border-white/40" />
+                <div className="w-[3px] h-4 rounded-full bg-violet-300" style={{ marginTop: -1 }} />
               </div>
-              <div className="absolute left-0 right-0 flex justify-between px-2.5" style={{ top: 34 }}>
-                <div className="w-3 h-2 rounded-full bg-pink-300/20" />
-                <div className="w-3 h-2 rounded-full bg-pink-300/20" />
+
+              {/* Body */}
+              <div
+                className="absolute left-0 right-0 rounded-3xl bg-gradient-to-b from-violet-300 to-violet-500 shadow-lg"
+                style={{ top: 10, bottom: 6 }}
+              >
+                {/* Eyes */}
+                <div className="absolute left-0 right-0 flex justify-center gap-4" style={{ top: 14 }}>
+                  <Eye blink={blink} happy={happy} px={pupil.x} py={pupil.y} />
+                  <Eye blink={blink} happy={happy} px={pupil.x} py={pupil.y} />
+                </div>
+
+                {/* Cheeks — properly visible rose blush */}
+                <div className="absolute left-0 right-0 flex justify-between px-2" style={{ top: 38 }}>
+                  <div className="w-5 h-3 rounded-full bg-rose-300/55" />
+                  <div className="w-5 h-3 rounded-full bg-rose-300/55" />
+                </div>
+
+                {/* Smile — big and clear */}
+                <div className="absolute left-0 right-0 flex justify-center" style={{ top: 38 }}>
+                  <svg width="26" height="12" viewBox="0 0 26 12" fill="none">
+                    <path d="M2 3 Q13 12 24 3" stroke="rgba(255,255,255,0.88)" strokeWidth="2.4" strokeLinecap="round" />
+                  </svg>
+                </div>
               </div>
-              <div className="absolute left-0 right-0 flex justify-center" style={{ top: 35 }}>
-                <svg width="20" height="8" viewBox="0 0 20 8" fill="none">
-                  <path d="M2 2 Q10 9 18 2" stroke="rgba(255,255,255,0.55)" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
+
+              {/* Feet */}
+              <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2">
+                <div className="w-5 h-5 rounded-full bg-violet-500 border-2 border-violet-300 shadow-md" />
+                <div className="w-5 h-5 rounded-full bg-violet-500 border-2 border-violet-300 shadow-md" />
               </div>
             </div>
-            <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2">
-              <div className="w-5 h-5 rounded-full bg-indigo-700 border-2 border-indigo-500 shadow-md" />
-              <div className="w-5 h-5 rounded-full bg-indigo-700 border-2 border-indigo-500 shadow-md" />
-            </div>
-          </div>
-          <div className="mt-2 text-center text-xs font-semibold text-violet-400/60 tracking-widest">pip</div>
+            <div className="mt-2 text-center text-xs font-semibold text-violet-400/70 tracking-widest">pip</div>
+          </motion.div>
         </motion.div>
       </motion.div>
     </div>

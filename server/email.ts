@@ -37,19 +37,22 @@ export async function sendTripInvite({
             <table cellpadding="0" cellspacing="0" style="margin:0 auto 12px;">
               <tr><td align="center">
                 <svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
-                  <rect width="56" height="56" rx="14" fill="#6d28d9"/>
-                  <!-- left eye white -->
-                  <circle cx="19" cy="28" r="9" fill="white"/>
-                  <!-- right eye white -->
-                  <circle cx="37" cy="28" r="9" fill="white"/>
-                  <!-- left pupil -->
-                  <circle cx="21" cy="28" r="5" fill="#1e1b4b"/>
-                  <!-- right pupil -->
-                  <circle cx="39" cy="28" r="5" fill="#1e1b4b"/>
-                  <!-- left highlight -->
-                  <circle cx="23" cy="25" r="2" fill="white"/>
-                  <!-- right highlight -->
-                  <circle cx="41" cy="25" r="2" fill="white"/>
+                  <defs>
+                    <linearGradient id="pipbg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#a78bfa"/>
+                      <stop offset="100%" stop-color="#6366f1"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="56" height="56" rx="14" fill="url(#pipbg)"/>
+                  <circle cx="16" cy="24" r="7" fill="white"/>
+                  <circle cx="40" cy="24" r="7" fill="white"/>
+                  <circle cx="17" cy="25" r="4" fill="#312e81"/>
+                  <circle cx="41" cy="25" r="4" fill="#312e81"/>
+                  <circle cx="19" cy="22" r="1.5" fill="white"/>
+                  <circle cx="43" cy="22" r="1.5" fill="white"/>
+                  <ellipse cx="8" cy="33" rx="5" ry="3" fill="#f9a8d4" opacity="0.5"/>
+                  <ellipse cx="48" cy="33" rx="5" ry="3" fill="#f9a8d4" opacity="0.5"/>
+                  <path d="M18 40 Q28 47 38 40" stroke="rgba(255,255,255,0.6)" stroke-width="2" stroke-linecap="round" fill="none"/>
                 </svg>
               </td></tr>
             </table>

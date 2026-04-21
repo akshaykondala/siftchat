@@ -530,7 +530,12 @@ export default function Dashboard() {
                 : `${trips.length} trip${trips.length !== 1 ? "s" : ""} · ${lockedCount} locked · ${upcomingCount} with dates`}
             </motion.p>
           </div>
-          <div className="shrink-0">
+          <motion.div
+            className="shrink-0"
+            initial={{ y: -60, opacity: 0, scale: 0.5, rotate: -12 }}
+            animate={{ y: 0, opacity: 1, scale: 1, rotate: 0 }}
+            transition={{ type: "spring", stiffness: 180, damping: 14, delay: 0.2 }}
+          >
             <PipCharacter speeches={[
               "Where to next? 🗺️",
               "So many trips, so little time!",
@@ -538,7 +543,7 @@ export default function Dashboard() {
               "Adventure is calling! 🌎",
               "Pick a trip and let's plan!",
             ]} />
-          </div>
+          </motion.div>
         </div>
 
         {/* Trip grid */}

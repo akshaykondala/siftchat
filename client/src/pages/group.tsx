@@ -1813,14 +1813,71 @@ function TravelWorkspace({
 }
 
 function PipThinkingBubble() {
+  const [look, setLook] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const dirs = [
+      { x: -2, y: -1 }, { x: 2, y: -1 }, { x: 0, y: -2 },
+      { x: -2, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 0 },
+      { x: 1.5, y: -1.5 }, { x: -1.5, y: 1 },
+    ];
+    setLook(dirs[Math.floor(Math.random() * dirs.length)]);
+    const id = setInterval(() => {
+      setLook(dirs[Math.floor(Math.random() * dirs.length)]);
+    }, 650);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 4 }}
-      className="flex items-start gap-2 max-w-[85%] sm:max-w-[75%]"
+      className="flex items-start gap-2.5 max-w-[85%] sm:max-w-[75%]"
     >
-      <PipAvatar />
+      {/* Larger animated Pip — eyes dart around while thinking */}
+      <motion.div
+        className="relative shrink-0"
+        style={{ width: 40, height: 50 }}
+        animate={{ y: [0, -5, 0] }}
+        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+      >
+        {/* Antenna */}
+        <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center" style={{ top: -3 }}>
+          <div className="rounded-full bg-violet-200" style={{ width: 5, height: 5 }} />
+          <div className="rounded-full bg-violet-300" style={{ width: 2, height: 7, marginTop: -1 }} />
+        </div>
+        {/* Body */}
+        <div
+          className="absolute left-0 right-0 rounded-2xl bg-gradient-to-b from-violet-300 to-violet-500 shadow-md"
+          style={{ top: 8, bottom: 7 }}
+        >
+          {/* Eyes with darting pupils */}
+          <div className="absolute left-0 right-0 flex justify-center gap-2" style={{ top: 6 }}>
+            {[0, 1].map((i) => (
+              <div key={i} className="rounded-full bg-white overflow-hidden flex items-center justify-center" style={{ width: 9, height: 9 }}>
+                <motion.div
+                  className="rounded-full bg-violet-500"
+                  style={{ width: 5, height: 5 }}
+                  animate={{ x: look.x, y: look.y }}
+                  transition={{ type: "spring", stiffness: 280, damping: 18 }}
+                />
+              </div>
+            ))}
+          </div>
+          {/* Cheeks */}
+          <div className="absolute left-0 right-0 flex justify-between px-1.5" style={{ top: 17 }}>
+            <div className="rounded-full bg-rose-300/55" style={{ width: 6, height: 3 }} />
+            <div className="rounded-full bg-rose-300/55" style={{ width: 6, height: 3 }} />
+          </div>
+        </div>
+        {/* Feet */}
+        <div className="absolute bottom-0 left-0 right-0 flex justify-between px-1.5">
+          <div className="rounded-full bg-violet-500 border border-violet-300" style={{ width: 8, height: 8 }} />
+          <div className="rounded-full bg-violet-500 border border-violet-300" style={{ width: 8, height: 8 }} />
+        </div>
+      </motion.div>
+
       <div>
         <div className="text-[10px] font-bold text-violet-600 dark:text-violet-400 mb-1">Pip</div>
         <div className="px-4 py-2.5 rounded-2xl rounded-tl-none bg-gradient-to-br from-violet-100 to-indigo-100 dark:from-violet-900/30 dark:to-indigo-900/30 shadow-sm border border-violet-200/50 dark:border-violet-800/50 flex items-center gap-1.5">
@@ -2277,6 +2334,10 @@ export default function GroupPage() {
     // smooth only for incremental new messages.
     messagesEndRef.current?.scrollIntoView({ behavior: prev === 0 ? "instant" : "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (pipIsThinking) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [pipIsThinking]);
 
   useEffect(() => {
     const pipCount = messages?.filter(m => m.isPip).length ?? 0;

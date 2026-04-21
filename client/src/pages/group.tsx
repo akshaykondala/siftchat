@@ -1676,7 +1676,7 @@ function TravelWorkspace({
       <div className={cn(
         "border-b flex items-center justify-between px-4 backdrop-blur-md shrink-0",
         tabMode
-          ? "pt-[calc(1rem+env(safe-area-inset-top))] pb-3"
+          ? "pt-[calc(1.5rem+env(safe-area-inset-top))] pb-3"
           : "h-16",
         isLocked
           ? "bg-emerald-50/80 dark:bg-emerald-950/30"
@@ -2168,7 +2168,6 @@ export default function GroupPage() {
   const [forceShowJoin, setForceShowJoin] = useState(false);
   const [mobileTab, setMobileTab] = useState<"chat" | "plan">("chat");
   const [showInvite, setShowInvite] = useState(false);
-  const [kbHeight, setKbHeight] = useState(0);
   const [inviteEmails, setInviteEmails] = useState("");
   const [inviteSending, setInviteSending] = useState(false);
   const prevPipCountRef = useRef(0);
@@ -2179,22 +2178,6 @@ export default function GroupPage() {
   const { otherOnline, typingUsers, pipIsThinking } = usePresence(group?.id ?? 0, participantId, isTyping);
   const prevTripStatusRef = useRef<string | null | undefined>(undefined);
   const isLocked = trip?.status === "Trip locked";
-
-  // Track keyboard height so the message input stays above the keyboard on iOS
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const update = () => {
-      const h = Math.max(0, window.innerHeight - vv.height);
-      setKbHeight(h);
-    };
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
-    return () => {
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
-    };
-  }, []);
 
   // Fire confetti + auto-switch to plan tab when trip becomes locked
   useEffect(() => {
@@ -2397,17 +2380,13 @@ export default function GroupPage() {
     <div className="flex h-screen bg-background overflow-hidden">
 
       {/* ── LEFT: Chat Panel ── */}
-      <div
-        className={cn(
-          "flex flex-col h-full relative min-w-0",
-          "md:flex",
-          mobileTab === "plan" ? "hidden" : "flex",
-          kbHeight === 0 && "pb-[calc(3.75rem+env(safe-area-inset-bottom))]",
-          "md:pb-0",
-          isLocked ? "md:w-80 lg:w-96" : "flex-1"
-        )}
-        style={kbHeight > 0 ? { paddingBottom: kbHeight } : undefined}
-      >
+      <div className={cn(
+        "flex flex-col h-full relative min-w-0",
+        "md:flex",
+        mobileTab === "plan" ? "hidden" : "flex",
+        "pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0",
+        isLocked ? "md:w-80 lg:w-96" : "flex-1"
+      )}>
         {/* Header */}
         <header className="min-h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0 pb-4 pt-[calc(1.5rem+env(safe-area-inset-top))]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -2480,8 +2459,7 @@ export default function GroupPage() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide" data-testid="messages-container">
-          <div className="flex flex-col min-h-full justify-end p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-3" data-testid="messages-container">
           <div className="text-center text-xs text-muted-foreground my-4">
             Group created {format(new Date(group.createdAt ?? new Date()), "MMM d, yyyy")}
           </div>
@@ -2508,7 +2486,6 @@ export default function GroupPage() {
             {pipIsThinking && <PipThinkingBubble key="pip-thinking" />}
           </AnimatePresence>
           <div ref={messagesEndRef} />
-          </div>
         </div>
 
         {/* Typing indicator */}

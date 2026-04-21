@@ -108,7 +108,7 @@ export default {
         "safe-right": "env(safe-area-inset-right)",
       },
       height: {
-        "tab-bar": "calc(3.75rem + env(safe-area-inset-bottom))",
+        "tab-bar": "calc(3rem + env(safe-area-inset-bottom))",
       },
     },
   },

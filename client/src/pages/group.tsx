@@ -2384,7 +2384,7 @@ export default function GroupPage() {
         "flex flex-col h-full relative min-w-0",
         "md:flex",
         mobileTab === "plan" ? "hidden" : "flex",
-        "pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0",
+        "pb-[calc(3rem+env(safe-area-inset-bottom))] md:pb-0",
         isLocked ? "md:w-80 lg:w-96" : "flex-1"
       )}>
         {/* Header */}
@@ -2550,7 +2550,7 @@ export default function GroupPage() {
            Tablet+: side-by-side (md:block). Mobile: tab-switched ── */}
       <div className={cn(
         "md:block md:h-full md:overflow-hidden",
-        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
+        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(3rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
         isLocked ? "md:flex-1" : "md:w-80 lg:w-96 xl:w-[420px]"
       )}>
         <TravelWorkspace
@@ -2570,7 +2570,7 @@ export default function GroupPage() {
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur-md flex pb-safe-bottom">
         <button
           className={cn(
-            "flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",
+            "flex-1 flex flex-col items-center gap-1 pt-3 pb-0 text-xs font-medium transition-colors",
             mobileTab === "chat" ? "text-primary" : "text-muted-foreground"
           )}
           onClick={() => setMobileTab("chat")}
@@ -2581,7 +2581,7 @@ export default function GroupPage() {
         </button>
         <button
           className={cn(
-            "flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors relative",
+            "flex-1 flex flex-col items-center gap-1 pt-3 pb-0 text-xs font-medium transition-colors relative",
             mobileTab === "plan" ? "text-primary" : "text-muted-foreground"
           )}
           onClick={() => setMobileTab("plan")}

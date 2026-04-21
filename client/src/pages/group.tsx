@@ -1105,7 +1105,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
   }, [countdown?.days, countdown?.hours, countdown?.mins]);
 
   return (
-    <div className="flex-1 overflow-y-auto flex flex-col">
+    <div className="flex-1 overflow-y-auto scrollbar-hide flex flex-col">
       {/* ── Hero ── */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
@@ -1192,7 +1192,7 @@ function LockedTripPanel({ trip, groupId, participantName, onUnlock, isUnlocking
       </motion.div>
 
       {/* ── Content ── */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-4">
+      <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 pb-4">
         {/* Checklist */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -1700,7 +1700,7 @@ function TravelWorkspace({
           onShareSummary={onShareSummary}
         />
       ) : (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20 md:pb-4">
+        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 pb-20 md:pb-4">
           {/* Trip Progress Bar */}
           {trip && (
             <div className="rounded-xl border bg-card/80 px-3 py-2">
@@ -2381,11 +2381,11 @@ export default function GroupPage() {
         "flex flex-col h-full relative min-w-0",
         "md:flex",
         mobileTab === "plan" ? "hidden" : "flex",
-        "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0",
+        "pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0",
         isLocked ? "md:w-80 lg:w-96" : "flex-1"
       )}>
         {/* Header */}
-        <header className="min-h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0 pb-4 pt-[calc(1rem+env(safe-area-inset-top))]">
+        <header className="min-h-16 border-b flex items-center justify-between px-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 shrink-0 pb-4 pt-[calc(1.25rem+env(safe-area-inset-top))]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <button
               onClick={() => setLocation("/")}
@@ -2456,7 +2456,7 @@ export default function GroupPage() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="messages-container">
+        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-3" data-testid="messages-container">
           <div className="text-center text-xs text-muted-foreground my-4">
             Group created {format(new Date(group.createdAt ?? new Date()), "MMM d, yyyy")}
           </div>
@@ -2547,7 +2547,7 @@ export default function GroupPage() {
            Tablet+: side-by-side (md:block). Mobile: tab-switched ── */}
       <div className={cn(
         "md:block md:h-full md:overflow-hidden",
-        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
+        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
         isLocked ? "md:flex-1" : "md:w-80 lg:w-96 xl:w-[420px]"
       )}>
         <TravelWorkspace

@@ -91,6 +91,51 @@
     font-family: var(--font-display);
     @apply font-bold tracking-tight;
   }
+
+  /* ── Native-app feel ── */
+
+  /* Hide every scrollbar universally */
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  * {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Remove tap flash and long-press callout on all elements */
+  * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+
+  /* Momentum scrolling on every scrollable container */
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-auto,
+  .overflow-scroll {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Remove 300ms tap delay on interactive elements */
+  button, a, input, textarea, select, [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* Suppress web-style focus rings on touch devices */
+  @media (hover: none) and (pointer: coarse) {
+    *:focus-visible {
+      outline: none;
+      box-shadow: none;
+    }
+    button, [role="button"], nav, header {
+      -webkit-user-select: none;
+      user-select: none;
+    }
+  }
 }
 
 @layer utilities {

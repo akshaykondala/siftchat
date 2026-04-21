@@ -470,7 +470,7 @@ export default function Dashboard() {
                         radial-gradient(circle at 80% 80%, rgba(79,70,229,0.04) 0%, transparent 50%)`,
     }}>
       {/* Header */}
-      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-md border-b border-border/50 px-6 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] flex items-center justify-between">
+      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-md border-b border-border/50 px-6 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] flex items-center justify-between">
         <button
           onClick={() => setShowProfile(true)}
           className="flex items-center gap-3 hover:opacity-80 transition-opacity group"
@@ -507,7 +507,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto"><div className="max-w-5xl mx-auto px-6 py-10 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+      <main className="flex-1 overflow-y-auto scrollbar-hide"><div className="max-w-5xl mx-auto px-6 py-10 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
         {/* Hero */}
         <div className="flex items-start justify-between mb-10 gap-4">
           <div>

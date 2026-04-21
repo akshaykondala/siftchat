@@ -507,9 +507,9 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto scrollbar-hide"><div className="max-w-5xl mx-auto px-6 py-10 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+      <main className="flex-1 overflow-y-auto scrollbar-hide"><div className="max-w-5xl mx-auto px-6 py-6 sm:py-10 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
         {/* Hero */}
-        <div className="flex items-start justify-between mb-10 gap-4">
+        <div className="flex items-start justify-between mb-6 sm:mb-10 gap-4">
           <div>
             <motion.h1
               initial={{ opacity: 0, x: -10 }}
@@ -565,7 +565,7 @@ export default function Dashboard() {
           </motion.div>
         ) : (
           // Extra padding-top so tape strips don't clip
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10 pt-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-10 pt-4">
             {trips.map((trip, i) => (
               <TripCard key={trip.id} trip={trip} index={i} onDeleted={handleTripDeleted} onRenamed={handleTripRenamed} />
             ))}

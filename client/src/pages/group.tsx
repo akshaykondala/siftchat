@@ -2270,7 +2270,12 @@ export default function GroupPage() {
   const myName = participants?.find(p => p.id === participantId)?.name ?? "You";
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const prev = prevMsgCountRef.current;
+    const curr = messages?.length ?? 0;
+    if (curr === 0) return;
+    // Instant scroll on initial load so WKWebView doesn't show blank gap;
+    // smooth only for incremental new messages.
+    messagesEndRef.current?.scrollIntoView({ behavior: prev === 0 ? "instant" : "smooth" });
   }, [messages]);
 
   useEffect(() => {

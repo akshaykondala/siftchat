@@ -76,10 +76,9 @@
     @apply bg-background text-foreground antialiased selection:bg-primary/20 selection:text-primary;
     font-family: var(--font-body);
     height: 100%;
+    width: 100%;
     overflow: hidden;
     overscroll-behavior: none;
-    position: fixed;
-    width: 100%;
   }
 
   #root {

@@ -1676,7 +1676,7 @@ function TravelWorkspace({
       <div className={cn(
         "border-b flex items-center justify-between px-4 backdrop-blur-md shrink-0",
         tabMode
-          ? "pt-[calc(1.5rem+env(safe-area-inset-top))] pb-3"
+          ? "pt-[calc(0.5rem+env(safe-area-inset-top))] pb-3"
           : "h-16",
         isLocked
           ? "bg-emerald-50/80 dark:bg-emerald-950/30"
@@ -1703,7 +1703,7 @@ function TravelWorkspace({
           onShareSummary={onShareSummary}
         />
       ) : (
-        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 pb-20 md:pb-4">
+        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 pb-4">
           {/* Trip Progress Bar */}
           {trip && (
             <div className="rounded-xl border bg-card/80 px-3 py-2">
@@ -2443,7 +2443,7 @@ export default function GroupPage() {
 
   // ── Main layout ──
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="flex h-dvh bg-background overflow-hidden">
 
       {/* ── LEFT: Chat Panel ── */}
       <div className={cn(

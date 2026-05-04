@@ -2450,7 +2450,7 @@ export default function GroupPage() {
         "flex flex-col h-full relative min-w-0",
         "md:flex",
         mobileTab === "plan" ? "hidden" : "flex",
-        "pb-[calc(3rem+env(safe-area-inset-bottom))] md:pb-0",
+        "pb-[calc(2.5rem+env(safe-area-inset-bottom))] md:pb-0",
         isLocked ? "md:w-80 lg:w-96" : "flex-1"
       )}>
         {/* Header */}
@@ -2616,7 +2616,7 @@ export default function GroupPage() {
            Tablet+: side-by-side (md:block). Mobile: tab-switched ── */}
       <div className={cn(
         "md:block md:h-full md:overflow-hidden",
-        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(3rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
+        mobileTab === "plan" ? "block h-full flex-1 pb-[calc(2.5rem+env(safe-area-inset-bottom))] md:pb-0" : "hidden",
         isLocked ? "md:flex-1" : "md:w-80 lg:w-96 xl:w-[420px]"
       )}>
         <TravelWorkspace
@@ -2636,24 +2636,24 @@ export default function GroupPage() {
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur-md flex pb-safe-bottom">
         <button
           className={cn(
-            "flex-1 flex flex-col items-center gap-1 pt-3 pb-0 text-xs font-medium transition-colors",
+            "flex-1 flex flex-col items-center gap-0.5 pt-1.5 pb-0 text-xs font-medium transition-colors",
             mobileTab === "chat" ? "text-primary" : "text-muted-foreground"
           )}
           onClick={() => setMobileTab("chat")}
           data-testid="tab-chat"
         >
-          <MessageCircle className="w-5 h-5" />
+          <MessageCircle className="w-[18px] h-[18px]" />
           Chat
         </button>
         <button
           className={cn(
-            "flex-1 flex flex-col items-center gap-1 pt-3 pb-0 text-xs font-medium transition-colors relative",
+            "flex-1 flex flex-col items-center gap-0.5 pt-1.5 pb-0 text-xs font-medium transition-colors relative",
             mobileTab === "plan" ? "text-primary" : "text-muted-foreground"
           )}
           onClick={() => setMobileTab("plan")}
           data-testid="tab-plan"
         >
-          <MapIcon className="w-5 h-5" />
+          <MapIcon className="w-[18px] h-[18px]" />
           Trip Plan
           {trip?.status && trip.status !== "Early ideas" && (
             <span className="absolute top-2 right-6 w-2 h-2 bg-primary rounded-full" />

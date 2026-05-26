@@ -1668,9 +1668,9 @@ The group has these members: ${participantNames.join(", ")}.
 Return ONLY a valid JSON object with this exact structure:
 {
   "mainPlan": {
-    "destination": "city or region name, or null if undecided",
-    "startDate": "start date string like 'May 24' or null",
-    "endDate": "end date string like 'May 27' or null",
+    "destination": "city, country, or region name — extract even vague mentions like 'Japan', 'Europe', 'the beach'. null only if truly undecided.",
+    "startDate": "ALWAYS extract dates when mentioned. Formats to handle: 'May 24', 'July 4th weekend' → 'July 4', 'first week of August' → 'Aug 1', 'mid-September' → 'Sep 15', 'this summer' → 'Jun 21', 'next month' → first of next month, 'Christmas' → 'Dec 25', 'New Years' → 'Dec 31', month-only like 'July' → 'Jul 1'. Use current year unless clearly future. null only if no date mentioned at all.",
+    "endDate": "Same rules as startDate. For month-only like 'July' → 'Jul 31'. For 'week of Aug 1' → 'Aug 7'. For 'weekend' → add 2 days to startDate. null only if no end date mentioned or inferrable.",
     "budgetBand": "one of: Budget-friendly / Moderate / Splurge / null",
     "lodgingPreference": "Airbnb / Hotel / Hostel / Camping / null",
     "originCity": null,
@@ -1712,8 +1712,8 @@ RULES:
 2. Only create alternatives that have real chat evidence. Do NOT hallucinate. Each alternative must differ from main plan in destination or dates.
 3. attendanceSignals — use exact member names from the list provided. "committed" = "book me in", "I'm in", "definitely"; "likely" = "planning to", "should be able to"; "interested" = "down for", "sounds fun", "maybe"; "unavailable" = "can't make it", "working that day", "won't be there".
 4. conflictDetected: set true if ANY message in the chat proposes dates/months that ANOTHER participant has explicitly said they cannot do. This overrides all other conditions — if conflictDetected=true you MUST set shouldPipSpeak=true. Examples: someone says "I'm busy in June" and later anyone suggests June dates; someone says "I can't do July" and then July is proposed. Scan ALL messages — the unavailability and the conflict proposal do not have to be adjacent.
-5. shouldPipSpeak = true when ANY of these apply: conflictDetected=true, a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck (same topic debated 4+ times with no progress), one clarifying question would unblock everything, all three key details are known for the first time. NOT after routine messages where nothing important changed.
-5b. pipMessage: direct, sharp, max 2 sentences. Pip has personality — a little cheeky, not a pushover. For conflicts, name the person and date explicitly ("Akshay said he's out in June — those dates don't work for him. Pick a different month?"). For stalemates: "You've been going back and forth on [topic] for a while — want me to just pick?" For decisions: add real urgency where relevant ("flights get more expensive every day you wait", "Airbnbs in [dest] go fast for groups"). null if shouldPipSpeak is false.
+5. shouldPipSpeak = true when ANY of these apply: conflictDetected=true, a new strong option emerged, the main plan just shifted significantly, the group is visibly stuck (same topic debated 4+ times with no progress), one clarifying question would unblock everything, all three key details are known for the first time. NOT after routine messages where nothing important changed. IMPORTANT: only speak ONCE per event — if Pip just spoke about this topic (visible in the chat log), set shouldPipSpeak=false.
+5b. pipMessage: direct, sharp, max 2 sentences. ONE message only — do not repeat information already in a recent Pip message. Pip has personality — a little cheeky, not a pushover. For conflicts, name the person and date explicitly. For stalemates: "You've been going back and forth on [topic] — want me to just pick?" For decisions: add urgency ("flights only get more expensive", "Airbnbs go fast for groups"). null if shouldPipSpeak is false.
 6. unresolvedQuestions: list only genuinely open questions (budget disagreements, unconfirmed dates, missing attendee commitment, etc.).
 7. If fewer than 3 messages or no clear travel intent, set confidenceScore to 5 and shouldPipSpeak to false.
 8. flightsBooked and lodgingBooked are NEVER set by AI — only via explicit @pip finalize. Do not include these fields.
@@ -1916,6 +1916,8 @@ RULES:
   // Pip posting: trust AI shouldPipSpeak + enforce anti-spam cooldown + backend conditions
   if (skipAllPipMessages) return;
 
+  let pipPostedThisRun = false;
+
   if (pipMessage) {
     const newPlan = await storage.getTripPlanByGroup(groupId);
     const newAlts = await storage.getTripAlternativesByGroup(groupId);
@@ -1949,10 +1951,12 @@ RULES:
 
     if (shouldPost) {
       await postPipMessage(groupId, pipMessage);
+      pipPostedThisRun = true;
     }
   }
 
   // Flight pip message — fires when flights are mentioned OR whenever destination+dates are all known.
+  // Track whether we post here too, so phase guidance doesn't double-fire.
   // Uses its own dedup key so it's independent of the regular pip cooldown.
   const hasFullFlightInfo = !!(mainPlan.destination && mainPlan.startDate && mainPlan.endDate);
   const shouldCheckFlight = mainPlan.flightsMentioned || hasFullFlightInfo;
@@ -1972,9 +1976,11 @@ RULES:
           kayakUrl: builtUrls.kayakUrl,
         })}`;
         await postPipMessage(groupId, flightPayload);
+        pipPostedThisRun = true;
       } else if (!hasFullFlightInfo && mainPlan.flightsMentioned) {
         const dest = mainPlan.destination ? ` to ${mainPlan.destination}` : "";
         await postPipMessage(groupId, `On it! I'll pull up flights${dest} as soon as we lock in the dates. ✈️`);
+        pipPostedThisRun = true;
       }
       await storage.upsertTripPlan(groupId, { lastFlightRecoKey: currentFlightKey });
     }
@@ -1997,20 +2003,26 @@ RULES:
           hotelsUrl: builtUrls.hotelsUrl,
         })}`;
         await postPipMessage(groupId, lodgingPayload);
+        pipPostedThisRun = true;
       } else {
         const dest = mainPlan.destination ? ` in ${mainPlan.destination}` : "";
         await postPipMessage(groupId, `Love it! I'll share Airbnb and hotel options${dest} once we have the dates. 🏠`);
+        pipPostedThisRun = true;
       }
       await storage.upsertTripPlan(groupId, { lastLodgingRecoKey: currentLodgingKey } as any);
     }
   }
 
   // ── Pip-guided phases ──────────────────────────────────────────────────────
-  // Send one targeted message per phase transition. Uses lastGuidedPhase as dedup key.
-  await runPhaseGuidance(groupId, participantsList);
+  // Skip if a message already posted this run — prevents double-firing on same event
+  if (!pipPostedThisRun) {
+    await runPhaseGuidance(groupId, participantsList);
+  }
 
   // ── Commitment nudge ──────────────────────────────────────────────────────
-  await runCommitmentNudge(groupId, participantsList);
+  if (!pipPostedThisRun) {
+    await runCommitmentNudge(groupId, participantsList);
+  }
 }
 
 // ============================================================

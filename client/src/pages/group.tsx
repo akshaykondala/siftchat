@@ -1863,6 +1863,40 @@ function FlightOptionsPanel({ groupId, participantId, participantName, participa
   );
 }
 
+// ─── Collapsible Availability Panel ────────────────────────────────────────────
+function CollapsibleAvailability({ groupId, participantCount }: { groupId: number; participantCount: number }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className="rounded-xl border bg-card/80 overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-secondary/30 transition-colors"
+      >
+        <div className="flex items-center gap-1.5">
+          <Calendar className="w-3.5 h-3.5 text-primary" />
+          <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Group Availability</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-muted-foreground/60">Pip uses this to find best dates</span>
+          {open ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+        </div>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t"
+          >
+            <GroupAvailabilityPanel groupId={groupId} participantCount={participantCount} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // ─── Itinerary Section ────────────────────────────────────────────────────────
 
 const BLOCK_LABELS = ["Morning", "Afternoon", "Evening"];
@@ -2113,17 +2147,20 @@ function ItinerarySection({ trip, groupId, participantName, participantCount }: 
                                   </button>
                                 </div>
 
-                                <p className={cn("text-[11px] font-semibold leading-snug", appliedText && "line-through text-muted-foreground/50 text-[10px]")}>
-                                  {block?.activity ?? "—"}
-                                </p>
-                                {appliedText && (
-                                  <p className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 mt-0.5">{appliedText} <span className="text-emerald-500">✓ applied</span></p>
+                                {appliedText ? (
+                                  <p className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 leading-snug">
+                                    {appliedText} <span className="text-[9px] text-emerald-500 font-bold">✓ updated by group</span>
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p className="text-[11px] font-semibold leading-snug">{block?.activity ?? "—"}</p>
+                                    <div className="flex gap-3 mt-1 text-[10px] text-muted-foreground flex-wrap">
+                                      {block?.cost && <span>💰 {block.cost}</span>}
+                                      {block?.transport && <span>🚗 {block.transport}</span>}
+                                    </div>
+                                    {block?.notes && <p className="text-[10px] text-muted-foreground/60 mt-0.5 italic">{block.notes}</p>}
+                                  </>
                                 )}
-                                <div className="flex gap-3 mt-1 text-[10px] text-muted-foreground flex-wrap">
-                                  {block?.cost && <span>💰 {block.cost}</span>}
-                                  {block?.transport && <span>🚗 {block.transport}</span>}
-                                </div>
-                                {block?.notes && <p className="text-[10px] text-muted-foreground/60 mt-0.5 italic">{block.notes}</p>}
 
                                 <AnimatePresence>
                                   {isSuggesting && (
@@ -2285,14 +2322,9 @@ function TravelWorkspace({
             </div>
           )}
 
-          {/* Group Availability */}
+          {/* Group Availability — collapsed by default; Pip uses this, not users */}
           {!isLocked && allParticipants.length > 0 && (
-            <div>
-              <GroupAvailabilityPanel
-                groupId={groupId}
-                participantCount={allParticipants.length}
-              />
-            </div>
+            <CollapsibleAvailability groupId={groupId} participantCount={allParticipants.length} />
           )}
 
           {/* Trip Card */}

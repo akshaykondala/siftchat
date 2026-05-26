@@ -1653,7 +1653,7 @@ function TripProgressBar({
           className="mt-3 flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl px-2.5 py-2 border border-emerald-200 dark:border-emerald-700"
         >
           <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
-            All steps complete! Ask @pip to build your itinerary 🗺️
+            All done! Scroll down to build your itinerary with Pip 🗺️
           </span>
         </motion.div>
       )}
@@ -1863,6 +1863,334 @@ function FlightOptionsPanel({ groupId, participantId, participantName, participa
   );
 }
 
+// ─── Itinerary Section ────────────────────────────────────────────────────────
+
+const BLOCK_LABELS = ["Morning", "Afternoon", "Evening"];
+const BLOCK_KEYS = ["morning", "afternoon", "evening"] as const;
+type BlockKey = typeof BLOCK_KEYS[number];
+interface ItinBlock { activity: string; cost: string; transport: string; notes: string; }
+interface ItinDay { dayNumber: number; date: string | null; morning: ItinBlock; afternoon: ItinBlock; evening: ItinBlock; }
+interface ItinData { destination: string; days: ItinDay[]; totalBudgetPerPerson: string; generalTips: string; }
+interface ItinSugg { id: number; dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string; votes: number; applied: boolean; }
+
+function ItinerarySection({ trip, groupId, participantName, participantCount }: {
+  trip: TripPlan;
+  groupId: number;
+  participantName: string;
+  participantCount: number;
+}) {
+  const parsedItinerary: ItinData | null = (() => { try { return trip.itinerary ? JSON.parse(trip.itinerary) : null; } catch { return null; } })();
+  const savedPrefs = (() => { try { return trip.itineraryPrefs ? JSON.parse(trip.itineraryPrefs) : {}; } catch { return {}; } })();
+
+  const [localItinerary, setLocalItinerary] = React.useState<ItinData | null>(parsedItinerary);
+  const [suggestions, setSuggestions] = React.useState<ItinSugg[]>([]);
+  const [expandedDay, setExpandedDay] = React.useState<number | null>(null);
+  const [showIntake, setShowIntake] = React.useState(!parsedItinerary);
+  const [generating, setGenerating] = React.useState(false);
+  const [prefs, setPrefs] = React.useState({ meals: savedPrefs.meals ?? "2", vibe: savedPrefs.vibe ?? "", budget: savedPrefs.budget ?? "$$", transport: savedPrefs.transport ?? "", mustDos: savedPrefs.mustDos ?? "", offLimits: savedPrefs.offLimits ?? "" });
+  const [suggestingBlock, setSuggestingBlock] = React.useState<{ day: number; block: number } | null>(null);
+  const [suggestionText, setSuggestionText] = React.useState("");
+  const [submittingSugg, setSubmittingSugg] = React.useState(false);
+
+  const loadSuggestions = React.useCallback(() => {
+    fetch(`/api/groups/${groupId}/itinerary-suggestions`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setSuggestions(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [groupId]);
+
+  React.useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
+
+  const generate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGenerating(true);
+    const token = localStorage.getItem("siftchat_token");
+    await fetch(`/api/groups/${groupId}/itinerary-prefs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ prefs, answeredBy: participantName }),
+    }).catch(() => {});
+    const res = await fetch(`/api/groups/${groupId}/generate-itinerary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    }).catch(() => null);
+    if (res?.ok) { const data = await res.json(); setLocalItinerary(data); setShowIntake(false); }
+    setGenerating(false);
+  };
+
+  const submitSuggestion = async () => {
+    if (!suggestingBlock || !suggestionText.trim()) return;
+    setSubmittingSugg(true);
+    const token = localStorage.getItem("siftchat_token");
+    await fetch(`/api/groups/${groupId}/itinerary-suggestions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ dayIndex: suggestingBlock.day, blockIndex: suggestingBlock.block, suggestion: suggestionText, proposedBy: participantName }),
+    }).catch(() => {});
+    setSuggestingBlock(null); setSuggestionText(""); setSubmittingSugg(false);
+    loadSuggestions();
+  };
+
+  const vote = async (suggId: number, delta: 1 | -1, proposedBy: string) => {
+    const token = localStorage.getItem("siftchat_token");
+    await fetch(`/api/groups/${groupId}/itinerary-suggestions/${suggId}/vote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ delta, proposedBy, participantCount }),
+    }).catch(() => {});
+    loadSuggestions();
+  };
+
+  const overrides = new Map<string, string>();
+  for (const s of suggestions) {
+    if (s.applied) overrides.set(`${s.dayIndex}-${s.blockIndex}`, s.suggestion);
+  }
+
+  const toggleVibe = (val: string) => setPrefs(p => ({
+    ...p,
+    vibe: p.vibe.split(",").map(v => v.trim()).filter(Boolean).includes(val)
+      ? p.vibe.split(",").map(v => v.trim()).filter(v => v && v !== val).join(", ")
+      : [...p.vibe.split(",").map(v => v.trim()).filter(Boolean), val].join(", "),
+  }));
+
+  const toggleTransport = (val: string) => setPrefs(p => ({
+    ...p,
+    transport: p.transport.split(",").map(v => v.trim()).filter(Boolean).includes(val)
+      ? p.transport.split(",").map(v => v.trim()).filter(v => v && v !== val).join(", ")
+      : [...p.transport.split(",").map(v => v.trim()).filter(Boolean), val].join(", "),
+  }));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+          <MapIcon className="w-3 h-3" /> Itinerary
+        </div>
+        {localItinerary && !showIntake && (
+          <button onClick={() => setShowIntake(true)} className="text-[10px] font-bold text-primary hover:underline">Regenerate</button>
+        )}
+      </div>
+
+      {/* Intake form */}
+      <AnimatePresence>
+        {showIntake && (
+          <motion.form key="intake" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} onSubmit={generate}
+            className="mb-3 rounded-2xl border bg-card p-3 space-y-3 overflow-hidden">
+            <p className="text-[11px] text-muted-foreground">Tell Pip about the vibe so the itinerary actually fits your crew.</p>
+
+            <div>
+              <label className="text-[10px] font-bold text-muted-foreground mb-1 block">Meals per day</label>
+              <div className="flex gap-1.5">
+                {[["1", "Dinner only"], ["2", "Lunch + Dinner"], ["3", "All 3"]].map(([v, label]) => (
+                  <button key={v} type="button" onClick={() => setPrefs(p => ({ ...p, meals: v }))}
+                    className={cn("flex-1 h-8 rounded-xl text-[10px] font-semibold border transition-colors",
+                      prefs.meals === v ? "bg-primary text-primary-foreground border-primary" : "bg-secondary/50 border-border text-muted-foreground hover:bg-secondary")}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold text-muted-foreground mb-1 block">Vibe (multi-select)</label>
+              <div className="flex flex-wrap gap-1.5">
+                {[["🏖️", "beach"], ["🥾", "hiking"], ["🏙️", "city"], ["🍽️", "foodie"], ["🎉", "nightlife"], ["🏛️", "culture"], ["😴", "chill"]].map(([emoji, val]) => {
+                  const selected = prefs.vibe.split(",").map(v => v.trim()).includes(val);
+                  return (
+                    <button key={val} type="button" onClick={() => toggleVibe(val)}
+                      className={cn("flex items-center gap-1 px-2 py-1 rounded-xl text-[10px] font-semibold border transition-colors",
+                        selected ? "bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 text-indigo-700 dark:text-indigo-300" : "bg-secondary/50 border-border text-muted-foreground hover:bg-secondary")}>
+                      {emoji} {val.charAt(0).toUpperCase() + val.slice(1)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold text-muted-foreground mb-1 block">Budget/person/day</label>
+                <div className="flex gap-1">
+                  {["$", "$$", "$$$"].map(v => (
+                    <button key={v} type="button" onClick={() => setPrefs(p => ({ ...p, budget: v }))}
+                      className={cn("flex-1 h-8 rounded-xl text-xs font-bold border transition-colors",
+                        prefs.budget === v ? "bg-primary text-primary-foreground border-primary" : "bg-secondary/50 border-border text-muted-foreground hover:bg-secondary")}>
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-muted-foreground mb-1 block">Getting around</label>
+                <div className="flex flex-wrap gap-1">
+                  {[["🚗", "car"], ["🚕", "uber"], ["🚇", "transit"], ["🚶", "walking"]].map(([emoji, val]) => {
+                    const selected = prefs.transport.split(",").map(v => v.trim()).includes(val);
+                    return (
+                      <button key={val} type="button" onClick={() => toggleTransport(val)}
+                        className={cn("flex items-center gap-0.5 px-1.5 py-1 rounded-lg text-[10px] font-semibold border transition-colors",
+                          selected ? "bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 text-indigo-700 dark:text-indigo-300" : "bg-secondary/50 border-border text-muted-foreground hover:bg-secondary")}>
+                        {emoji}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold text-muted-foreground mb-1 block">Must-dos <span className="font-normal opacity-60">(optional)</span></label>
+              <textarea value={prefs.mustDos} onChange={e => setPrefs(p => ({ ...p, mustDos: e.target.value }))} placeholder="Specific spots, restaurants, activities…" rows={2}
+                className="w-full rounded-xl bg-secondary/50 border border-border px-2 py-1.5 text-[10px] focus:outline-none focus:border-primary/40 resize-none" />
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold text-muted-foreground mb-1 block">Off-limits <span className="font-normal opacity-60">(optional)</span></label>
+              <textarea value={prefs.offLimits} onChange={e => setPrefs(p => ({ ...p, offLimits: e.target.value }))} placeholder="Allergies, things people hate…" rows={2}
+                className="w-full rounded-xl bg-secondary/50 border border-border px-2 py-1.5 text-[10px] focus:outline-none focus:border-primary/40 resize-none" />
+            </div>
+
+            <div className="flex gap-2">
+              {localItinerary && (
+                <button type="button" onClick={() => setShowIntake(false)}
+                  className="flex-1 h-10 rounded-2xl border border-border text-sm font-semibold text-muted-foreground hover:bg-secondary transition-colors">
+                  Cancel
+                </button>
+              )}
+              <button type="submit" disabled={generating}
+                className="flex-1 h-10 rounded-2xl bg-primary text-primary-foreground text-sm font-bold disabled:opacity-60 flex items-center justify-center gap-2">
+                {generating ? <><div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> Generating…</> : "Build itinerary 🗺️"}
+              </button>
+            </div>
+          </motion.form>
+        )}
+      </AnimatePresence>
+
+      {/* Rendered itinerary */}
+      {localItinerary && !showIntake && (
+        <div className="rounded-2xl border border-border bg-card overflow-hidden">
+          {/* Header */}
+          <div className="px-3 py-3 bg-gradient-to-r from-indigo-500 to-violet-500 text-white">
+            <p className="text-xs font-black">{localItinerary.destination}</p>
+            {localItinerary.totalBudgetPerPerson && (
+              <p className="text-[10px] opacity-80 mt-0.5">~{localItinerary.totalBudgetPerPerson} per person</p>
+            )}
+          </div>
+
+          {/* Days accordion */}
+          <div className="divide-y divide-border">
+            {(localItinerary.days ?? []).map((day, di) => {
+              const isExpanded = expandedDay === di;
+              return (
+                <div key={di}>
+                  <button onClick={() => setExpandedDay(isExpanded ? null : di)}
+                    className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-secondary/30 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-[10px] font-black shrink-0">
+                        {day.dayNumber}
+                      </span>
+                      <span className="text-[11px] font-bold">Day {day.dayNumber}{day.date ? ` · ${day.date}` : ""}</span>
+                    </div>
+                    {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+                  </button>
+
+                  <AnimatePresence>
+                    {isExpanded && (
+                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                        <div className="px-3 pb-3 space-y-2">
+                          {BLOCK_KEYS.map((key, bi) => {
+                            const block: ItinBlock = day[key];
+                            const appliedText = overrides.get(`${di}-${bi}`);
+                            const blockSuggs = suggestions.filter(s => s.dayIndex === di && s.blockIndex === bi && !s.applied);
+                            const isSuggesting = suggestingBlock?.day === di && suggestingBlock?.block === bi;
+
+                            return (
+                              <div key={key} className="rounded-xl bg-secondary/30 p-2.5">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">{BLOCK_LABELS[bi]}</span>
+                                  <button onClick={() => { setSuggestingBlock(isSuggesting ? null : { day: di, block: bi }); setSuggestionText(""); }}
+                                    className="text-[9px] font-bold text-primary/70 hover:text-primary transition-colors">
+                                    {isSuggesting ? "Cancel" : "Suggest change"}
+                                  </button>
+                                </div>
+
+                                <p className={cn("text-[11px] font-semibold leading-snug", appliedText && "line-through text-muted-foreground/50 text-[10px]")}>
+                                  {block?.activity ?? "—"}
+                                </p>
+                                {appliedText && (
+                                  <p className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 mt-0.5">{appliedText} <span className="text-emerald-500">✓ applied</span></p>
+                                )}
+                                <div className="flex gap-3 mt-1 text-[10px] text-muted-foreground flex-wrap">
+                                  {block?.cost && <span>💰 {block.cost}</span>}
+                                  {block?.transport && <span>🚗 {block.transport}</span>}
+                                </div>
+                                {block?.notes && <p className="text-[10px] text-muted-foreground/60 mt-0.5 italic">{block.notes}</p>}
+
+                                <AnimatePresence>
+                                  {isSuggesting && (
+                                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="mt-2 overflow-hidden">
+                                      <div className="flex gap-1.5">
+                                        <input autoFocus value={suggestionText} onChange={e => setSuggestionText(e.target.value)}
+                                          onKeyDown={e => e.key === "Enter" && !e.shiftKey && submitSuggestion()}
+                                          placeholder="Suggest something instead…"
+                                          className="flex-1 h-7 rounded-lg bg-background border border-border px-2 text-[10px] focus:outline-none focus:border-primary/40" />
+                                        <button onClick={submitSuggestion} disabled={submittingSugg || !suggestionText.trim()}
+                                          className="h-7 px-2.5 rounded-lg bg-primary text-primary-foreground text-[10px] font-bold disabled:opacity-50 transition-colors">
+                                          Post
+                                        </button>
+                                      </div>
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+
+                                {blockSuggs.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {blockSuggs.map(s => (
+                                      <div key={s.id} className="flex items-start gap-1.5 bg-background rounded-lg px-2 py-1.5 border border-border/40">
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-[10px] font-semibold text-foreground leading-snug">{s.suggestion}</p>
+                                          <p className="text-[9px] text-muted-foreground mt-0.5">by {s.proposedBy} · {s.votes} vote{s.votes !== 1 ? "s" : ""}</p>
+                                        </div>
+                                        <div className="flex gap-0.5 shrink-0 mt-0.5">
+                                          <button onClick={() => vote(s.id, 1, s.proposedBy)}
+                                            className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold hover:bg-emerald-200 transition-colors">↑</button>
+                                          <button onClick={() => vote(s.id, -1, s.proposedBy)}
+                                            className="w-6 h-6 rounded-lg bg-secondary text-muted-foreground text-[11px] font-bold hover:bg-secondary/80 transition-colors">↓</button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
+
+          {localItinerary.generalTips && (
+            <div className="px-3 py-2.5 bg-secondary/20 border-t">
+              <p className="text-[10px] font-bold text-muted-foreground mb-0.5">Tips from Pip</p>
+              <p className="text-[10px] text-muted-foreground/80 leading-relaxed">{localItinerary.generalTips}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!localItinerary && !showIntake && (
+        <div className="rounded-2xl border border-dashed border-border bg-secondary/20 px-3 py-4 text-center">
+          <p className="text-[11px] text-muted-foreground">No itinerary yet.</p>
+          <button onClick={() => setShowIntake(true)} className="mt-1 text-[11px] font-bold text-primary hover:underline">Build one with Pip →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Travel Workspace Panel ────────────────────────────────────────────────────
 function TravelWorkspace({
   groupId,
@@ -2022,6 +2350,16 @@ function TravelWorkspace({
               lodgingType={(trip as any).airbnbUrl ? "rental" : (trip as any).hotelsUrl ? "hotel" : ((trip as any).lodgingType ?? null)}
               flightsRelevant={!!(trip.flightSearchUrl || (trip as any).kayakUrl || trip.flightsBooked)}
               lodgingRelevant={!!((trip as any).airbnbUrl || (trip as any).hotelsUrl || trip.lodgingBooked || trip.lodgingPreference)}
+            />
+          )}
+
+          {/* Itinerary Generator */}
+          {trip && trip.destination && (
+            <ItinerarySection
+              trip={trip}
+              groupId={groupId}
+              participantName={participantName}
+              participantCount={allParticipants.length}
             />
           )}
 

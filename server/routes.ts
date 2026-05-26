@@ -845,14 +845,16 @@ export async function registerRoutes(
     try {
       const groupParticipants = await storage.getParticipantsByGroup(groupId);
       const entries = await storage.getGroupAvailability(groupId, start, end);
-      const userIds = new Set(entries.map(e => e.userId));
-      const linkedCount = groupParticipants.filter(p => p.userId !== null).length;
-      const setAvailabilityCount = userIds.size;
+      const setUserIds = new Set(entries.map(e => e.userId));
+      const linkedParticipants = groupParticipants.filter(p => p.userId !== null);
+      const linkedCount = linkedParticipants.length;
+      const setAvailabilityCount = setUserIds.size;
+      const notSetNames = linkedParticipants.filter(p => !setUserIds.has(p.userId!)).map(p => p.name);
       // Only compute best windows if at least one person has marked some availability
       const bestWindows = setAvailabilityCount > 0
         ? computeBestAvailabilityWindows(entries, linkedCount)
         : [];
-      res.json({ entries, bestWindows, participantCount: groupParticipants.length, linkedCount, setAvailabilityCount });
+      res.json({ entries, bestWindows, participantCount: groupParticipants.length, linkedCount, setAvailabilityCount, notSetNames });
     } catch {
       res.status(500).json({ message: "Internal Server Error" });
     }

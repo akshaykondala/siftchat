@@ -32,6 +32,7 @@ interface GroupAvailData {
   participantCount: number;
   linkedCount: number;
   setAvailabilityCount: number;
+  notSetNames: string[];
 }
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
@@ -92,8 +93,9 @@ export function GroupAvailabilityPanel({
   const canGoPrev = viewMonth > startOfMonth(today);
   const canGoNext = viewMonth < maxMonth;
 
-  const notSetCount = data ? (data.linkedCount - data.setAvailabilityCount) : 0;
-  const showNudge = !nudgeDismissed && data && notSetCount > 0 && notSetCount >= Math.ceil(data.linkedCount / 2);
+  const notSetNames = data?.notSetNames ?? [];
+  const nobodySet = !!data && data.linkedCount > 0 && data.setAvailabilityCount === 0;
+  const someMissing = !nudgeDismissed && !nobodySet && notSetNames.length > 0;
 
   const handleNudgePip = async () => {
     setNudgeSending(true);
@@ -136,36 +138,60 @@ export function GroupAvailabilityPanel({
         )}
       </div>
 
-      {/* Nudge banner */}
+      {/* Nobody set — full empty state (replaces calendar) */}
+      {nobodySet ? (
+        <div className="mx-3 mb-3 rounded-2xl bg-red-50 dark:bg-red-900/20 border-2 border-red-300 dark:border-red-700/60 px-4 py-5 text-center">
+          <div className="text-3xl mb-2">📅</div>
+          <p className="text-sm font-black text-red-800 dark:text-red-300">No one's set their availability</p>
+          <p className="text-[11px] text-red-700 dark:text-red-400 mt-1.5 leading-relaxed">
+            Everyone needs to open their profile (tap the avatar on the home screen) and mark which days they're busy. Until then, Pip can't find the best dates.
+          </p>
+          <button
+            onClick={handleNudgePip}
+            disabled={nudgeSending}
+            className="mt-3 w-full h-10 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <Bell className="w-3.5 h-3.5" />
+            Have Pip call everyone out
+          </button>
+        </div>
+      ) : null}
+
+      {/* Some missing — persistent banner with names */}
       <AnimatePresence>
-        {showNudge && (
+        {someMissing && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="mx-3 mb-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 px-3 py-2.5"
+            className="mx-3 mb-2 rounded-xl bg-orange-50 dark:bg-orange-900/20 border-2 border-orange-300 dark:border-orange-700/60 px-3 py-3"
           >
             <div className="flex items-start gap-2">
-              <div className="text-base">⚠️</div>
+              <div className="text-base leading-none mt-0.5">🙈</div>
               <div className="flex-1 min-w-0">
-                <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
-                  {notSetCount} of {data!.linkedCount} haven't set availability yet
+                <p className="text-[11px] font-bold text-orange-800 dark:text-orange-300">
+                  Missing:{" "}
+                  <span className="font-black">
+                    {notSetNames.length <= 3
+                      ? notSetNames.join(", ")
+                      : `${notSetNames.slice(0, 2).join(", ")} +${notSetNames.length - 2} more`}
+                  </span>
                 </p>
-                <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
-                  Pip can't find the best dates until everyone fills in their calendar.
+                <p className="text-[10px] text-orange-700 dark:text-orange-400 mt-0.5">
+                  {notSetNames.length === 1 ? "They haven't" : "They haven't"} set their availability — the calendar below is incomplete.
                 </p>
               </div>
-              <button onClick={() => setNudgeDismissed(true)} className="text-amber-400 hover:text-amber-600 mt-0.5">
+              <button onClick={() => setNudgeDismissed(true)} className="text-orange-400 hover:text-orange-600 shrink-0">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
             <button
               onClick={handleNudgePip}
               disabled={nudgeSending}
-              className="mt-2 w-full text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-800/30 hover:bg-amber-200 dark:hover:bg-amber-700/40 rounded-lg py-1.5 transition-colors flex items-center justify-center gap-1.5"
+              className="mt-2 w-full text-[11px] font-bold text-orange-800 dark:text-orange-300 bg-orange-100 dark:bg-orange-800/30 hover:bg-orange-200 dark:hover:bg-orange-700/40 rounded-lg py-1.5 transition-colors flex items-center justify-center gap-1.5"
             >
               <Bell className="w-3 h-3" />
-              Have Pip remind them
+              Have Pip call them out
             </button>
           </motion.div>
         )}

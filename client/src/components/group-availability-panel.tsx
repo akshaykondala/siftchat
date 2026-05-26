@@ -37,14 +37,13 @@ interface GroupAvailData {
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
-function buildDateMap(entries: AvailEntry[]): Map<string, { available: string[]; busy: string[]; tentative: string[] }> {
-  const map = new Map<string, { available: string[]; busy: string[]; tentative: string[] }>();
+function buildDateMap(entries: AvailEntry[]): Map<string, { available: string[]; busy: string[] }> {
+  const map = new Map<string, { available: string[]; busy: string[] }>();
   for (const e of entries) {
-    if (!map.has(e.date)) map.set(e.date, { available: [], busy: [], tentative: [] });
+    if (!map.has(e.date)) map.set(e.date, { available: [], busy: [] });
     const b = map.get(e.date)!;
     if (e.status === "available") b.available.push(e.participantName);
-    else if (e.status === "busy") b.busy.push(e.participantName);
-    else if (e.status === "tentative") b.tentative.push(e.participantName);
+    else if (e.status === "busy" || e.status === "tentative") b.busy.push(e.participantName);
   }
   return map;
 }
@@ -260,9 +259,7 @@ export function GroupAvailabilityPanel({
             // Use linkedCount from API if available, fall back to participantCount
             const denom = (data?.linkedCount || participantCount) || 1;
             const busyCount = bucket ? bucket.busy.length : 0;
-            const tentativeCount = bucket ? bucket.tentative.length : 0;
-            // Conflict score: 0 = everyone free, 1 = everyone busy
-            const conflictFrac = (busyCount + tentativeCount * 0.5) / denom;
+            const conflictFrac = busyCount / denom;
             const hasConflict = conflictFrac > 0;
 
             return (
@@ -311,26 +308,18 @@ export function GroupAvailabilityPanel({
             </div>
             {(() => {
               const busyNames = selectedDayData?.busy ?? [];
-              const tentativeNames = selectedDayData?.tentative ?? [];
-              const explicitlyMarked = new Set([...busyNames, ...tentativeNames, ...(selectedDayData?.available ?? [])]);
-              // Everyone not explicitly marked is free by default
-              const implicitlyFreeNames = data?.entries
-                ? Array.from(new Set(data.entries.map(e => e.participantName))).filter(n => !explicitlyMarked.has(n))
+              const explicitlyMarked = new Set([...busyNames, ...(selectedDayData?.available ?? [])]);
+              const allLinkedNames = data?.entries
+                ? Array.from(new Set(data.entries.map(e => e.participantName)))
                 : [];
-              const allFreeNames = [...(selectedDayData?.available ?? []), ...implicitlyFreeNames];
+              const freeNames = allLinkedNames.filter(n => !explicitlyMarked.has(n) || (selectedDayData?.available ?? []).includes(n));
 
               return (
                 <div className="space-y-1">
-                  {allFreeNames.length > 0 && (
+                  {freeNames.length > 0 && (
                     <div className="flex items-center gap-1.5">
                       <div className="w-2.5 h-2.5 rounded-full bg-secondary ring-1 ring-border shrink-0" />
-                      <span className="text-[10px] text-muted-foreground">Free: <span className="text-foreground font-medium">{allFreeNames.join(", ")}</span></span>
-                    </div>
-                  )}
-                  {tentativeNames.length > 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
-                      <span className="text-[10px] text-muted-foreground">Maybe: <span className="text-foreground font-medium">{tentativeNames.join(", ")}</span></span>
+                      <span className="text-[10px] text-muted-foreground">Free: <span className="text-foreground font-medium">{freeNames.join(", ")}</span></span>
                     </div>
                   )}
                   {busyNames.length > 0 && (
@@ -339,7 +328,7 @@ export function GroupAvailabilityPanel({
                       <span className="text-[10px] text-muted-foreground">Busy: <span className="text-foreground font-medium">{busyNames.join(", ")}</span></span>
                     </div>
                   )}
-                  {allFreeNames.length === 0 && tentativeNames.length === 0 && busyNames.length === 0 && (
+                  {freeNames.length === 0 && busyNames.length === 0 && (
                     <p className="text-[10px] text-muted-foreground italic">No one's set their availability yet.</p>
                   )}
                 </div>
@@ -351,7 +340,7 @@ export function GroupAvailabilityPanel({
 
       {/* Legend */}
       <div className="flex items-center justify-center gap-4 px-3 py-2 border-t text-[9px] text-muted-foreground">
-        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm bg-secondary ring-1 ring-border" /> Free (default)</div>
+        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm bg-secondary ring-1 ring-border" /> Free</div>
         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm bg-red-400/50" /> Busy</div>
         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm ring-1 ring-emerald-400" /> Best window</div>
       </div>

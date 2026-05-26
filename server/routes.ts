@@ -888,6 +888,189 @@ export async function registerRoutes(
     }
   });
 
+  // ─── Flight Options ──────────────────────────────────────────────────────────
+
+  app.get("/api/groups/:groupId/flight-options", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const opts = await storage.getFlightOptions(groupId);
+      res.json(opts);
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  app.post("/api/groups/:groupId/flight-options", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId, participantName, origin, airline, price, departureAt, url } = req.body;
+    if (!participantId || !participantName || !origin) return res.status(400).json({ message: "participantId, participantName, origin required" });
+    try {
+      const opt = await storage.addFlightOption(groupId, {
+        participantId: Number(participantId), participantName, origin,
+        airline, price: price ? Number(price) : undefined, departureAt, url,
+      });
+      res.json(opt);
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  app.delete("/api/groups/:groupId/flight-options/:id", async (req, res) => {
+    const id = Number(req.params.id);
+    try { await storage.deleteFlightOption(id); res.json({ ok: true }); }
+    catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  app.patch("/api/groups/:groupId/flight-options/:id/select", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const id = Number(req.params.id);
+    const { participantId } = req.body;
+    if (!participantId) return res.status(400).json({ message: "participantId required" });
+    try {
+      await storage.selectFlightOption(groupId, Number(participantId), id);
+      res.json({ ok: true });
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  // ─── Itinerary ───────────────────────────────────────────────────────────────
+
+  app.post("/api/groups/:groupId/itinerary-prefs", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { prefs, answeredBy } = req.body;
+    if (!prefs || typeof prefs !== "object") return res.status(400).json({ message: "prefs object required" });
+    try {
+      await storage.saveItineraryPrefs(groupId, prefs);
+      if (answeredBy) {
+        await storage.createPipMessage(groupId, `Got it! ${answeredBy} answered for the group. Once all questions are in, tap "Generate itinerary" and I'll build the full day-by-day plan 🗺️`);
+      }
+      res.json({ ok: true });
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  app.post("/api/groups/:groupId/generate-itinerary", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const plan = await storage.getTripPlanByGroup(groupId);
+      const participants = await storage.getParticipantsByGroup(groupId);
+      if (!plan?.destination) return res.status(400).json({ message: "Trip needs a destination first" });
+
+      const prefs = plan.itineraryPrefs ? JSON.parse(plan.itineraryPrefs) : {};
+      const days = plan.startDate && plan.endDate
+        ? Math.max(1, Math.round((new Date(plan.endDate).getTime() - new Date(plan.startDate).getTime()) / 86400000) + 1)
+        : (prefs.tripLength ? Number(prefs.tripLength) : 3);
+
+      const systemPrompt = `You are Pip, a travel planning assistant. Generate a detailed day-by-day itinerary as JSON.
+Return ONLY valid JSON matching this exact structure:
+{
+  "destination": string,
+  "days": [
+    {
+      "dayNumber": number,
+      "date": string or null,
+      "morning": { "activity": string, "cost": string, "transport": string, "notes": string },
+      "afternoon": { "activity": string, "cost": string, "transport": string, "notes": string },
+      "evening": { "activity": string, "cost": string, "transport": string, "notes": string }
+    }
+  ],
+  "totalBudgetPerPerson": string,
+  "generalTips": string
+}
+Be specific — name real restaurants, attractions, neighborhoods. Not generic tourist advice.`;
+
+      const userPrompt = `Destination: ${plan.destination}
+Dates: ${plan.startDate ?? "TBD"} to ${plan.endDate ?? "TBD"} (${days} days)
+Group size: ${participants.length} people
+Meals per day: ${prefs.meals ?? "2"}
+Vibe: ${prefs.vibe ?? "mix of everything"}
+Budget: ${prefs.budget ?? "$$"}
+Transport: ${prefs.transport ?? "mix"}
+Must-dos: ${prefs.mustDos ?? "none specified"}
+Off-limits: ${prefs.offLimits ?? "none"}`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+        response_format: { type: "json_object" },
+        max_tokens: 2500,
+      });
+
+      const raw = completion.choices[0]?.message?.content ?? "{}";
+      const itinerary = JSON.parse(raw);
+      await storage.saveItinerary(groupId, itinerary);
+      await storage.createPipMessage(groupId, `Your itinerary for ${plan.destination} is ready! Check the Trip Plan panel — tap any block to suggest a change, and the group can vote on it 🎉`);
+      res.json(itinerary);
+    } catch (e) {
+      console.error("generate-itinerary error:", e);
+      res.status(500).json({ message: "Failed to generate itinerary" });
+    }
+  });
+
+  app.get("/api/groups/:groupId/itinerary-suggestions", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try { res.json(await storage.getItinerarySuggestions(groupId)); }
+    catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  app.post("/api/groups/:groupId/itinerary-suggestions", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { dayIndex, blockIndex, suggestion, proposedBy } = req.body;
+    if (dayIndex == null || blockIndex == null || !suggestion || !proposedBy) {
+      return res.status(400).json({ message: "dayIndex, blockIndex, suggestion, proposedBy required" });
+    }
+    try {
+      const s = await storage.addItinerarySuggestion(groupId, { dayIndex, blockIndex, suggestion, proposedBy });
+      res.json(s);
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  app.post("/api/groups/:groupId/itinerary-suggestions/:id/vote", async (req, res) => {
+    const id = Number(req.params.id);
+    const { delta, proposedBy, participantCount } = req.body;
+    if (delta !== 1 && delta !== -1) return res.status(400).json({ message: "delta must be 1 or -1" });
+    try {
+      const updated = await storage.voteItinerarySuggestion(id, delta);
+      // Auto-apply if majority voted for it
+      if (participantCount && updated.votes >= Math.ceil(participantCount / 2) && !updated.applied) {
+        await storage.applyItinerarySuggestion(id);
+        const groupId = Number(req.params.groupId);
+        await storage.createPipMessage(groupId, `Majority voted for ${proposedBy}'s suggestion on day ${updated.dayIndex + 1} — swapped it in! ✅`);
+      }
+      res.json(updated);
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  // ─── Pip step nudge ──────────────────────────────────────────────────────────
+
+  app.post("/api/groups/:groupId/pip-step-nudge", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { step } = req.body; // 1-5
+    if (!step) return res.status(400).json({ message: "step required" });
+    try {
+      const plan = await storage.getTripPlanByGroup(groupId);
+      // Don't re-nudge the same step within 24 hours
+      if (plan?.lastNudgeStep === step && plan?.lastNudgeAt) {
+        const hoursSince = (Date.now() - new Date(plan.lastNudgeAt).getTime()) / 3600000;
+        if (hoursSince < 24) return res.json({ ok: true, skipped: true });
+      }
+      const participants = await storage.getParticipantsByGroup(groupId);
+      const commitments = await storage.getCommitments(groupId);
+      const notCommittedNames = participants
+        .filter(p => !commitments.find(c => c.participantId === p.id && c.flightBooked))
+        .map(p => p.name);
+
+      const msgs: Record<number, string> = {
+        1: `Hey crew! First things first — where are we going? Drop a destination in the chat and let's vote on it 🌍`,
+        2: `Destination locked! Now let's nail down dates. Check the availability calendar and propose a window in the chat 📅`,
+        3: `Dates are set! ${notCommittedNames.length > 0 ? `${notCommittedNames.join(", ")} — you're up.` : "Everyone needs to"} Tap "I'm in" to confirm you're coming 🙋`,
+        4: `Crew confirmed! Time to book flights ✈️ Add your flight options in the Trip Plan panel so everyone can compare prices.`,
+        5: `Flights sorted! One last step — book lodging 🏠 Check off yours once it's done so everyone can see the status.`,
+      };
+
+      const message = msgs[step as number];
+      if (message) {
+        await storage.createPipMessage(groupId, message);
+        await storage.upsertTripPlan(groupId, { lastNudgeStep: step, lastNudgeAt: new Date() });
+      }
+      res.json({ ok: true });
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
   // === LINK PARTICIPANT TO USER when joining ===
   // (handled inline in the join route — patching here via middleware on group join)
 
@@ -2044,7 +2227,7 @@ function computeBestAvailabilityWindows(
   // Score = 1 - (busyFraction). Unset days score 1.0 (everyone free).
   const dateScores = new Map<string, number>();
   for (const [date, b] of Array.from(dateMap.entries())) {
-    const conflictScore = (b.busy.size + b.tentative.size * 0.5) / linkedParticipantCount;
+    const conflictScore = (b.busy.size + b.tentative.size) / linkedParticipantCount;
     dateScores.set(date, 1 - conflictScore);
   }
 
@@ -2094,7 +2277,7 @@ function computeBestAvailabilityWindows(
           startDate: windowDates[0],
           endDate: windowDates[windowDates.length - 1],
           availableCount: firstBucket.available.size,
-          totalParticipants,
+          totalParticipants: linkedParticipantCount,
           score: avgScore,
           availableNames: Array.from(firstBucket.available),
           busyNames: Array.from(firstBucket.busy),

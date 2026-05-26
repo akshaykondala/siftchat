@@ -2,10 +2,11 @@ import { db } from "./db";
 import {
   groups, participants, messages, plans, planVotes,
   tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems, bookingCommitments, deviceTokens, users,
-  userAvailability,
+  userAvailability, flightOptions, itinerarySuggestions,
   type Group, type Participant, type Message, type Plan, type PlanVote,
   type TripPlan, type TripAlternative, type SupportSignal, type PipMessage, type PinboardItem,
   type BookingCommitment, type CommitmentLevel, type DeviceToken, type UserAvailability,
+  type FlightOption, type ItinerarySuggestion,
 } from "@shared/schema";
 import { eq, desc, and, isNull, gte, lte, inArray } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -74,6 +75,20 @@ export interface IStorage {
   getGroupAvailability(groupId: number, start?: string, end?: string): Promise<{
     participantId: number; participantName: string; userId: number; date: string; status: string;
   }[]>;
+
+  // Flight Options
+  getFlightOptions(groupId: number): Promise<FlightOption[]>;
+  addFlightOption(groupId: number, data: { participantId: number; participantName: string; origin: string; airline?: string; price?: number; departureAt?: string; url?: string }): Promise<FlightOption>;
+  deleteFlightOption(id: number): Promise<void>;
+  selectFlightOption(groupId: number, participantId: number, optionId: number): Promise<void>;
+
+  // Itinerary
+  saveItineraryPrefs(groupId: number, prefs: Record<string, string>): Promise<void>;
+  saveItinerary(groupId: number, itinerary: unknown): Promise<void>;
+  getItinerarySuggestions(groupId: number): Promise<ItinerarySuggestion[]>;
+  addItinerarySuggestion(groupId: number, data: { dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string }): Promise<ItinerarySuggestion>;
+  voteItinerarySuggestion(id: number, delta: 1 | -1): Promise<ItinerarySuggestion>;
+  applyItinerarySuggestion(id: number): Promise<void>;
 
   // Group management
   updateGroupName(groupId: number, name: string): Promise<Group>;
@@ -380,12 +395,68 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  // === FLIGHT OPTIONS ===
+
+  async getFlightOptions(groupId: number): Promise<FlightOption[]> {
+    return db.select().from(flightOptions).where(eq(flightOptions.groupId, groupId)).orderBy(flightOptions.price);
+  }
+
+  async addFlightOption(groupId: number, data: { participantId: number; participantName: string; origin: string; airline?: string; price?: number; departureAt?: string; url?: string }): Promise<FlightOption> {
+    const [opt] = await db.insert(flightOptions).values({ groupId, ...data }).returning();
+    return opt;
+  }
+
+  async deleteFlightOption(id: number): Promise<void> {
+    await db.delete(flightOptions).where(eq(flightOptions.id, id));
+  }
+
+  async selectFlightOption(groupId: number, participantId: number, optionId: number): Promise<void> {
+    // Deselect all options for this participant, then select the chosen one
+    await db.update(flightOptions).set({ selected: false })
+      .where(and(eq(flightOptions.groupId, groupId), eq(flightOptions.participantId, participantId)));
+    await db.update(flightOptions).set({ selected: true })
+      .where(and(eq(flightOptions.id, optionId), eq(flightOptions.participantId, participantId)));
+  }
+
+  // === ITINERARY ===
+
+  async saveItineraryPrefs(groupId: number, prefs: Record<string, string>): Promise<void> {
+    await this.upsertTripPlan(groupId, { itineraryPrefs: JSON.stringify(prefs) });
+  }
+
+  async saveItinerary(groupId: number, itinerary: unknown): Promise<void> {
+    await this.upsertTripPlan(groupId, { itinerary: JSON.stringify(itinerary) });
+  }
+
+  async getItinerarySuggestions(groupId: number): Promise<ItinerarySuggestion[]> {
+    return db.select().from(itinerarySuggestions).where(eq(itinerarySuggestions.groupId, groupId)).orderBy(desc(itinerarySuggestions.votes));
+  }
+
+  async addItinerarySuggestion(groupId: number, data: { dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string }): Promise<ItinerarySuggestion> {
+    const [s] = await db.insert(itinerarySuggestions).values({ groupId, ...data }).returning();
+    return s;
+  }
+
+  async voteItinerarySuggestion(id: number, delta: 1 | -1): Promise<ItinerarySuggestion> {
+    const [s] = await db.update(itinerarySuggestions)
+      .set({ votes: sql`${itinerarySuggestions.votes} + ${delta}` })
+      .where(eq(itinerarySuggestions.id, id))
+      .returning();
+    return s;
+  }
+
+  async applyItinerarySuggestion(id: number): Promise<void> {
+    await db.update(itinerarySuggestions).set({ applied: true }).where(eq(itinerarySuggestions.id, id));
+  }
+
   async updateGroupName(groupId: number, name: string): Promise<Group> {
     const [group] = await db.update(groups).set({ name }).where(eq(groups.id, groupId)).returning();
     return group;
   }
 
   async deleteGroup(groupId: number): Promise<void> {
+    await db.delete(flightOptions).where(eq(flightOptions.groupId, groupId));
+    await db.delete(itinerarySuggestions).where(eq(itinerarySuggestions.groupId, groupId));
     await db.delete(bookingCommitments).where(eq(bookingCommitments.groupId, groupId));
     await db.delete(pinboardItems).where(eq(pinboardItems.groupId, groupId));
     await db.delete(pipMessages).where(eq(pipMessages.groupId, groupId));

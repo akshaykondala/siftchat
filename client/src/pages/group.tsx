@@ -1545,52 +1545,50 @@ function TripProgressBar({
   trip,
   commitments,
   participantCount,
+  groupId,
 }: {
   trip: TripPlan | null | undefined;
-  commitments: { flightBooked: boolean }[];
+  commitments: { participantId: number; flightBooked: boolean; lodgingStatus: string }[];
   participantCount: number;
+  groupId: number;
 }) {
+  const nudgeSentRef = React.useRef<number | null>(null);
   if (!trip) return null;
 
-  const flightCommittedCount = commitments.filter((c) => c.flightBooked).length;
-  const crewIn = participantCount > 0 && flightCommittedCount >= participantCount;
+  const flightBookedCount = commitments.filter((c) => c.flightBooked).length;
+  const lodgingBookedCount = commitments.filter((c) => c.lodgingStatus === "booked" || c.lodgingStatus === "covered").length;
+  const crewIn = participantCount > 0 && (trip.committedAttendeeNames?.length ?? 0) >= participantCount;
 
   const steps = [
-    {
-      label: "Destination",
-      done: !!trip.destination,
-      icon: "🌍",
-    },
-    {
-      label: "Dates",
-      done: !!(trip.startDate || trip.endDate),
-      icon: "📅",
-    },
-    {
-      label: "Crew in",
-      done: crewIn,
-      icon: "🙋",
-    },
-    {
-      label: "Flights",
-      done: trip.flightsBooked === true,
-      icon: "✈️",
-    },
-    {
-      label: "Lodging",
-      done: trip.lodgingBooked === true,
-      icon: "🏠",
-    },
+    { label: "Destination", done: !!trip.destination, icon: "🌍", cta: "Chat @pip with a destination idea" },
+    { label: "Dates", done: !!(trip.startDate && trip.endDate), icon: "📅", cta: "Check the availability calendar and propose a window" },
+    { label: "Crew in", done: crewIn, icon: "🙋", cta: "Everyone needs to tap \"I'm in\" below" },
+    { label: "Flights", done: participantCount > 0 && flightBookedCount >= participantCount, icon: "✈️", cta: "Add your flight options below — compare prices as a group" },
+    { label: "Lodging", done: participantCount > 0 && lodgingBookedCount >= participantCount, icon: "🏠", cta: "Check off your lodging once it's booked" },
   ];
 
+  const currentStepIdx = steps.findIndex((s) => !s.done);
   const doneCount = steps.filter((s) => s.done).length;
   const pct = Math.round((doneCount / steps.length) * 100);
+  const allDone = currentStepIdx === -1;
+
+  React.useEffect(() => {
+    if (allDone || currentStepIdx < 0) return;
+    const step = currentStepIdx + 1;
+    if (nudgeSentRef.current === step) return;
+    nudgeSentRef.current = step;
+    fetch(`/api/groups/${groupId}/pip-step-nudge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step }),
+    }).catch(() => {});
+  }, [currentStepIdx, groupId, allDone]);
 
   return (
     <div className="px-1 py-2">
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Trip Progress</span>
-        <span className="text-[10px] font-bold text-muted-foreground">{pct}%</span>
+        <span className="text-[10px] font-bold text-muted-foreground">{pct}%{allDone ? " 🎉" : ""}</span>
       </div>
       <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden mb-3">
         <motion.div
@@ -1601,25 +1599,266 @@ function TripProgressBar({
         />
       </div>
       <div className="flex gap-1">
-        {steps.map((step, i) => (
-          <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
-            <div
-              className={cn(
-                "w-6 h-6 rounded-full flex items-center justify-center text-[11px] transition-all",
-                step.done
-                  ? "bg-violet-100 dark:bg-violet-900/40 ring-1 ring-violet-400"
-                  : "bg-muted ring-1 ring-border opacity-50"
-              )}
-              title={step.label}
-            >
-              {step.done ? step.icon : <span className="text-muted-foreground text-[9px] font-bold">{i + 1}</span>}
+        {steps.map((step, i) => {
+          const isCurrent = i === currentStepIdx;
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+              <div
+                className={cn(
+                  "w-6 h-6 rounded-full flex items-center justify-center text-[11px] transition-all relative",
+                  step.done
+                    ? "bg-emerald-100 dark:bg-emerald-900/40 ring-1 ring-emerald-400"
+                    : isCurrent
+                    ? "bg-indigo-100 dark:bg-indigo-900/40 ring-2 ring-indigo-500"
+                    : "bg-muted ring-1 ring-border opacity-40"
+                )}
+                title={step.label}
+              >
+                {step.done
+                  ? step.icon
+                  : isCurrent
+                  ? <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                  : <span className="text-muted-foreground text-[9px] font-bold">{i + 1}</span>}
+              </div>
+              <span className={cn(
+                "text-[8px] text-center leading-tight",
+                step.done ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                  : isCurrent ? "text-indigo-600 dark:text-indigo-400 font-bold"
+                  : "text-muted-foreground"
+              )}>
+                {step.label}
+              </span>
             </div>
-            <span className={cn("text-[8px] text-center leading-tight", step.done ? "text-violet-600 dark:text-violet-400 font-semibold" : "text-muted-foreground")}>
-              {step.label}
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
+      {/* CTA for current step */}
+      {!allDone && currentStepIdx >= 0 && (
+        <motion.div
+          key={currentStepIdx}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-3 flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl px-2.5 py-2 border border-indigo-200 dark:border-indigo-700"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0 animate-pulse" />
+          <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold leading-snug">
+            {steps[currentStepIdx].cta} →
+          </span>
+        </motion.div>
+      )}
+      {allDone && (
+        <motion.div
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-3 flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl px-2.5 py-2 border border-emerald-200 dark:border-emerald-700"
+        >
+          <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
+            All steps complete! Ask @pip to build your itinerary 🗺️
+          </span>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// ─── Flight Options Panel ──────────────────────────────────────────────────────
+interface FlightOpt { id: number; participantId: number; participantName: string; origin: string; airline: string | null; price: number | null; departureAt: string | null; url: string | null; selected: boolean; }
+
+function FlightOptionsPanel({ groupId, participantId, participantName, participants }: { groupId: number; participantId: number; participantName: string; participants: { id: number; name: string }[] }) {
+  const [options, setOptions] = React.useState<FlightOpt[]>([]);
+  const [showForm, setShowForm] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [form, setForm] = React.useState({ origin: "", airline: "", price: "", departureAt: "", url: "" });
+
+  const load = React.useCallback(() => {
+    fetch(`/api/groups/${groupId}/flight-options`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setOptions(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [groupId]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.origin.trim()) return;
+    setSubmitting(true);
+    const token = localStorage.getItem("siftchat_token");
+    await fetch(`/api/groups/${groupId}/flight-options`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ participantId, participantName, ...form, price: form.price ? Number(form.price) : undefined }),
+    }).catch(() => {});
+    setForm({ origin: "", airline: "", price: "", departureAt: "", url: "" });
+    setShowForm(false);
+    setSubmitting(false);
+    load();
+  };
+
+  const remove = async (id: number) => {
+    await fetch(`/api/groups/${groupId}/flight-options/${id}`, { method: "DELETE" }).catch(() => {});
+    load();
+  };
+
+  const select = async (optId: number) => {
+    const token = localStorage.getItem("siftchat_token");
+    await fetch(`/api/groups/${groupId}/flight-options/${optId}/select`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ participantId }),
+    }).catch(() => {});
+    load();
+  };
+
+  // Group options by participant, find cheapest per person
+  const byParticipant = new Map<number, FlightOpt[]>();
+  for (const opt of options) {
+    if (!byParticipant.has(opt.participantId)) byParticipant.set(opt.participantId, []);
+    byParticipant.get(opt.participantId)!.push(opt);
+  }
+
+  const cheapestSelected = Array.from(byParticipant.values())
+    .map(opts => opts.find(o => o.selected) ?? opts.slice().sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0])
+    .filter(Boolean);
+  const totalCheapest = cheapestSelected.reduce((s, o) => s + (o?.price ?? 0), 0);
+
+  const participantsWithoutOptions = participants.filter(p => !byParticipant.has(p.id));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1">
+          <Plane className="w-3 h-3" /> Flight Options
+        </div>
+        <button
+          onClick={() => setShowForm(v => !v)}
+          className="text-[10px] font-bold text-primary hover:underline"
+        >
+          {showForm ? "Cancel" : "+ Add mine"}
+        </button>
+      </div>
+
+      {/* Add form */}
+      <AnimatePresence>
+        {showForm && (
+          <motion.form
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            onSubmit={submit}
+            className="mb-3 rounded-2xl border bg-card p-3 space-y-2"
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground block mb-1">From *</label>
+                <input value={form.origin} onChange={e => setForm(f => ({ ...f, origin: e.target.value }))} placeholder="NYC" className="w-full h-8 rounded-lg bg-secondary/50 border border-border px-2 text-xs focus:outline-none focus:border-primary/40" required />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Airline</label>
+                <input value={form.airline} onChange={e => setForm(f => ({ ...f, airline: e.target.value }))} placeholder="Delta" className="w-full h-8 rounded-lg bg-secondary/50 border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Price ($)</label>
+                <input type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} placeholder="420" className="w-full h-8 rounded-lg bg-secondary/50 border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Date</label>
+                <input value={form.departureAt} onChange={e => setForm(f => ({ ...f, departureAt: e.target.value }))} placeholder="Jun 15" className="w-full h-8 rounded-lg bg-secondary/50 border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Link (optional)</label>
+              <input value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} placeholder="https://..." className="w-full h-8 rounded-lg bg-secondary/50 border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+            </div>
+            <button type="submit" disabled={submitting} className="w-full h-8 rounded-xl bg-primary text-primary-foreground text-xs font-bold disabled:opacity-60">
+              {submitting ? "Adding..." : "Add flight option"}
+            </button>
+          </motion.form>
+        )}
+      </AnimatePresence>
+
+      {/* Options grouped by participant */}
+      {options.length > 0 ? (
+        <div className="rounded-2xl border border-border bg-card overflow-hidden divide-y divide-border">
+          {Array.from(byParticipant.entries()).map(([pid, opts]) => {
+            const pName = opts[0].participantName;
+            const isMe = pid === participantId;
+            const cheapest = opts.slice().sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0];
+            return (
+              <div key={pid} className="p-2.5">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-black text-primary shrink-0">
+                    {pName.charAt(0).toUpperCase()}
+                  </div>
+                  <span className="text-[11px] font-semibold">{isMe ? "You" : pName}</span>
+                </div>
+                <div className="space-y-1">
+                  {opts.map(opt => {
+                    const isCheapest = opt.id === cheapest?.id && opts.length > 1;
+                    return (
+                      <div key={opt.id} className={cn(
+                        "flex items-center gap-2 rounded-xl px-2 py-1.5 text-[10px]",
+                        opt.selected ? "bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700" : "bg-secondary/40"
+                      )}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="font-semibold">{opt.origin}</span>
+                            {opt.airline && <span className="text-muted-foreground">· {opt.airline}</span>}
+                            {opt.departureAt && <span className="text-muted-foreground">· {opt.departureAt}</span>}
+                            {isCheapest && <span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold px-1 rounded text-[9px]">cheapest</span>}
+                            {opt.selected && <span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold px-1 rounded text-[9px]">✓ selected</span>}
+                          </div>
+                          {opt.price && <div className="font-black text-foreground mt-0.5">${opt.price.toLocaleString()}</div>}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {opt.url && (
+                            <a href={opt.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-[10px] font-bold px-1.5 py-0.5 rounded-lg bg-primary/10">
+                              View
+                            </a>
+                          )}
+                          {isMe && !opt.selected && (
+                            <button onClick={() => select(opt.id)} className="text-[10px] font-bold px-1.5 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 transition-colors">
+                              Book this
+                            </button>
+                          )}
+                          {isMe && (
+                            <button onClick={() => remove(opt.id)} className="text-muted-foreground hover:text-destructive p-0.5">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          {/* Missing participants */}
+          {participantsWithoutOptions.length > 0 && (
+            <div className="px-3 py-2">
+              <p className="text-[10px] text-muted-foreground">
+                Waiting for: <span className="font-semibold text-foreground">{participantsWithoutOptions.map(p => p.name).join(", ")}</span>
+              </p>
+            </div>
+          )}
+          {/* Cheapest total */}
+          {totalCheapest > 0 && (
+            <div className="px-3 py-2 bg-emerald-50/50 dark:bg-emerald-900/10">
+              <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                Cheapest combo: ${totalCheapest.toLocaleString()} total · ${Math.round(totalCheapest / Math.max(cheapestSelected.length, 1)).toLocaleString()} avg per person
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        !showForm && (
+          <div className="rounded-2xl border border-dashed border-border bg-secondary/20 px-3 py-4 text-center">
+            <p className="text-[11px] text-muted-foreground">No flight options added yet.</p>
+            <p className="text-[10px] text-muted-foreground/60 mt-0.5">Add yours so the group can compare prices.</p>
+          </div>
+        )
+      )}
     </div>
   );
 }
@@ -1651,13 +1890,14 @@ function TravelWorkspace({
   const lockMutation = useLockTrip(groupId);
   const unlockMutation = useUnlockTrip(groupId);
 
-  const [progressCommitments, setProgressCommitments] = React.useState<{ flightBooked: boolean }[]>([]);
-  React.useEffect(() => {
+  const [progressCommitments, setProgressCommitments] = React.useState<{ participantId: number; flightBooked: boolean; lodgingStatus: string }[]>([]);
+  const refreshCommitments = React.useCallback(() => {
     fetch(`/api/groups/${groupId}/commitments`)
       .then(r => r.ok ? r.json() : [])
       .then(data => setProgressCommitments(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [groupId]);
+  React.useEffect(() => { refreshCommitments(); }, [refreshCommitments]);
 
   const winnerAltId = trip?.winningAlternativeId;
   const isLocked = trip?.status === "Trip locked";
@@ -1712,6 +1952,7 @@ function TravelWorkspace({
                 trip={trip}
                 commitments={progressCommitments}
                 participantCount={allParticipants.length}
+                groupId={groupId}
               />
             </div>
           )}
@@ -1736,6 +1977,16 @@ function TravelWorkspace({
               allParticipants={allParticipants}
             />
           </div>
+
+          {/* Flight Options — group price comparison */}
+          {trip && allParticipants.length > 0 && (
+            <FlightOptionsPanel
+              groupId={groupId}
+              participantId={participantId}
+              participantName={participantName}
+              participants={allParticipants}
+            />
+          )}
 
           {/* Featured Flight */}
           {trip && (trip.flightSearchUrl || (trip as any).kayakUrl) && (

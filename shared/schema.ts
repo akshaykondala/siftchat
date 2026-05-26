@@ -87,8 +87,11 @@ export const tripPlans = pgTable("trip_plans", {
   winningAlternativeId: integer("winning_alternative_id"),
   lastGuidedPhase: text("last_guided_phase"), // "kickoff"|"destination"|"dates"|"crew"|"flights"|"lodging"
   lastNudgeAt: timestamp("last_nudge_at"),
+  lastNudgeStep: integer("last_nudge_step"), // 1–5, which step was last nudged
   flightDeadline: text("flight_deadline"), // ISO date string "YYYY-MM-DD"
   lodgingDeadline: text("lodging_deadline"), // ISO date string "YYYY-MM-DD"
+  itineraryPrefs: text("itinerary_prefs"), // JSON string: intake Q&A answers
+  itinerary: text("itinerary"), // JSON string: generated day-by-day itinerary
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -163,6 +166,34 @@ export const userAvailability = pgTable("user_availability", {
   index("idx_user_availability_user_id").on(t.userId),
 ]);
 
+// Per-participant flight options — group sees all, cheapest highlighted
+export const flightOptions = pgTable("flight_options", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  participantId: integer("participant_id").notNull(),
+  participantName: text("participant_name").notNull(),
+  origin: text("origin").notNull(),
+  airline: text("airline"),
+  price: real("price"),
+  departureAt: text("departure_at"), // ISO datetime or date string
+  url: text("url"),
+  selected: boolean("selected").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [index("idx_flight_options_group_id").on(t.groupId)]);
+
+// Collaborative itinerary suggestions — any member can propose a change to a block
+export const itinerarySuggestions = pgTable("itinerary_suggestions", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull(),
+  dayIndex: integer("day_index").notNull(),
+  blockIndex: integer("block_index").notNull(), // 0=morning 1=afternoon 2=evening
+  suggestion: text("suggestion").notNull(),
+  proposedBy: text("proposed_by").notNull(),
+  votes: integer("votes").default(0),
+  applied: boolean("applied").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [index("idx_itinerary_suggestions_group_id").on(t.groupId)]);
+
 // Pinboard items — activities/ideas added to the locked trip board
 export const pinboardItems = pgTable("pinboard_items", {
   id: serial("id").primaryKey(),
@@ -236,6 +267,8 @@ export type PipMessage = typeof pipMessages.$inferSelect;
 export type PinboardItem = typeof pinboardItems.$inferSelect;
 export type DeviceToken = typeof deviceTokens.$inferSelect;
 export type UserAvailability = typeof userAvailability.$inferSelect;
+export type FlightOption = typeof flightOptions.$inferSelect;
+export type ItinerarySuggestion = typeof itinerarySuggestions.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
 export type JoinGroupRequest = { name: string };

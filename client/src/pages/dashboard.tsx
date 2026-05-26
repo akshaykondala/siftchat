@@ -307,9 +307,9 @@ function TripCard({ trip, index, onDeleted, onRenamed }: {
   );
 }
 
-function ProfileModal({ onClose }: { onClose: () => void }) {
+function ProfileModal({ onClose, initialTab = "profile" }: { onClose: () => void; initialTab?: "profile" | "availability" }) {
   const { user, saveAuth } = useAuth();
-  const [activeTab, setActiveTab] = useState<"profile" | "availability">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "availability">(initialTab);
   const [name, setName] = useState(user?.name ?? "");
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? "");
   const [loading, setLoading] = useState(false);
@@ -443,9 +443,34 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const [showNewTrip, setShowNewTrip] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [profileInitialTab, setProfileInitialTab] = useState<"profile" | "availability">("profile");
   const [tripName, setTripName] = useState("");
   const createGroup = useCreateGroup();
   const queryClient = useQueryClient();
+
+  const { data: userAvailability = [] } = useQuery<{ date: string; status: string }[]>({
+    queryKey: ["/api/availability/me", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const token = getStoredToken();
+      const today = new Date().toISOString().split("T")[0];
+      const end = new Date(Date.now() + 90 * 86400000).toISOString().split("T")[0];
+      const res = await fetch(`/api/availability/${user.id}?start=${today}&end=${end}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!user?.id,
+    staleTime: 60000,
+  });
+
+  const hasSetAvailability = userAvailability.length > 0;
+
+  const openAvailabilityTab = () => {
+    setProfileInitialTab("availability");
+    setShowProfile(true);
+  };
 
   const { data: tripsData = [], isLoading } = useQuery<TripSummary[]>({
     queryKey: ["/api/users/me/trips"],
@@ -515,7 +540,7 @@ export default function Dashboard() {
       {/* Header */}
       <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-md border-b border-border/50 px-6 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] flex items-center justify-between">
         <button
-          onClick={() => setShowProfile(true)}
+          onClick={() => { setProfileInitialTab("profile"); setShowProfile(true); }}
           className="flex items-center gap-3 hover:opacity-80 transition-opacity group"
         >
           <div className="relative">
@@ -589,6 +614,31 @@ export default function Dashboard() {
           </motion.div>
         </div>
 
+        {/* Availability CTA — shown when user hasn't set any busy dates */}
+        <AnimatePresence>
+          {!isLoading && !hasSetAvailability && (
+            <motion.button
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ delay: 0.25 }}
+              onClick={openAvailabilityTab}
+              className="mb-6 w-full rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 border-2 border-indigo-200 dark:border-indigo-700 px-4 py-4 text-left flex items-center gap-3 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors active:scale-[0.99]"
+            >
+              <div className="w-10 h-10 rounded-2xl bg-indigo-500 flex items-center justify-center shrink-0">
+                <Calendar className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-indigo-900 dark:text-indigo-200">Set your availability</p>
+                <p className="text-[11px] text-indigo-600 dark:text-indigo-400 mt-0.5 leading-relaxed">
+                  Mark when you're busy — Pip uses this across all your trips to find the best dates.
+                </p>
+              </div>
+              <ArrowRight className="w-4 h-4 text-indigo-400 shrink-0" />
+            </motion.button>
+          )}
+        </AnimatePresence>
+
         {/* Trip grid */}
         {isLoading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10 pt-6">
@@ -623,7 +673,7 @@ export default function Dashboard() {
 
       {/* Profile modal */}
       <AnimatePresence>
-        {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
+        {showProfile && <ProfileModal onClose={() => setShowProfile(false)} initialTab={profileInitialTab} />}
       </AnimatePresence>
 
       {/* New trip modal */}

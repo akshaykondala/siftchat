@@ -8,13 +8,6 @@ import { cn } from "@/lib/utils";
 import { getStoredToken } from "@/hooks/use-auth";
 import { motion, AnimatePresence } from "framer-motion";
 
-type AvailStatus = "busy" | "tentative";
-
-interface AvailabilityEntry {
-  date: string;
-  status: string;
-}
-
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
 function orderDates(a: string, b: string): [string, string] {
@@ -33,10 +26,10 @@ function datesInRange(start: string, end: string): string[] {
   return result;
 }
 
-export function AvailabilityCalendar({ userId }: { userId: number }) {
+export function AvailabilityCalendar({ userId, onSaved }: { userId: number; onSaved?: () => void }) {
   const [viewMonth, setViewMonth] = useState(startOfMonth(new Date()));
-  const [localEntries, setLocalEntries] = useState<Map<string, AvailStatus>>(new Map());
-  const [savedEntries, setSavedEntries] = useState<Map<string, AvailStatus>>(new Map());
+  const [busyDates, setBusyDates] = useState<Set<string>>(new Set());
+  const [savedDates, setSavedDates] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const today = startOfToday();
@@ -56,28 +49,21 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then(r => r.ok ? r.json() : [])
-      .then((entries: AvailabilityEntry[]) => {
-        const map = new Map<string, AvailStatus>();
-        for (const e of entries) {
-          if (e.status === "busy" || e.status === "tentative") {
-            map.set(e.date, e.status as AvailStatus);
-          }
-        }
-        setLocalEntries(new Map(map));
-        setSavedEntries(new Map(map));
+      .then((entries: { date: string; status: string }[]) => {
+        // Treat both "busy" and old "tentative" entries as busy
+        const set = new Set<string>(
+          entries.filter(e => e.status === "busy" || e.status === "tentative").map(e => e.date)
+        );
+        setBusyDates(new Set(set));
+        setSavedDates(new Set(set));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [userId]);
 
   const isDirty = (() => {
-    if (localEntries.size !== savedEntries.size) return true;
-    for (const [date, status] of Array.from(localEntries.entries())) {
-      if (savedEntries.get(date) !== status) return true;
-    }
-    for (const date of Array.from(savedEntries.keys())) {
-      if (!localEntries.has(date)) return true;
-    }
+    if (busyDates.size !== savedDates.size) return true;
+    for (const d of Array.from(busyDates)) { if (!savedDates.has(d)) return true; }
     return false;
   })();
 
@@ -88,15 +74,14 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
     setHoverDay(null);
   };
 
-  const applyToRange = (status: AvailStatus | null) => {
+  const applyToRange = (busy: boolean) => {
     if (!rangeStart) return;
-    const end = rangeEnd ?? rangeStart;
-    const dates = datesInRange(rangeStart, end);
-    setLocalEntries(prev => {
-      const next = new Map(prev);
+    const dates = datesInRange(rangeStart, rangeEnd ?? rangeStart);
+    setBusyDates(prev => {
+      const next = new Set(prev);
       for (const d of dates) {
-        if (status === null) next.delete(d);
-        else next.set(d, status);
+        if (busy) next.add(d);
+        else next.delete(d);
       }
       return next;
     });
@@ -104,15 +89,10 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
   };
 
   const handleDayTap = (dateStr: string) => {
-    if (showActionBar) {
-      cancelRange();
-      return;
-    }
+    if (showActionBar) { cancelRange(); return; }
     if (rangeStart === null) {
-      // First tap — start range
       setRangeStart(dateStr);
     } else {
-      // Second tap — end range, show action bar
       setRangeEnd(dateStr);
       setShowActionBar(true);
       setHoverDay(null);
@@ -122,21 +102,20 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
   const handleSave = async () => {
     setSaving(true);
     const token = getStoredToken();
-    const allDates = Array.from(new Set([
-      ...Array.from(localEntries.keys()),
-      ...Array.from(savedEntries.keys()),
-    ]));
-    const payload = allDates.map(date => ({ date, status: localEntries.get(date) ?? "unset" }));
+    // Build full diff: add new busy dates + remove cleared dates
+    const allDates = Array.from(new Set([...Array.from(busyDates), ...Array.from(savedDates)]));
+    const payload = allDates.map(date => ({
+      date,
+      status: busyDates.has(date) ? "busy" : "unset",
+    }));
     try {
       await fetch("/api/availability", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(payload),
       });
-      setSavedEntries(new Map(localEntries));
+      setSavedDates(new Set(busyDates));
+      onSaved?.();
     } catch { /* no-op */ }
     setSaving(false);
   };
@@ -148,17 +127,16 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
   const canGoPrev = viewMonth > startOfMonth(today);
   const canGoNext = viewMonth < maxMonth;
 
-  // Compute active range for highlighting
   const effectiveEnd = showActionBar ? rangeEnd : hoverDay;
   const rangeSet = new Set<string>();
-  const [selStart, selEnd] = rangeStart && effectiveEnd
-    ? orderDates(rangeStart, effectiveEnd)
-    : [rangeStart ?? "", rangeStart ?? ""];
   if (rangeStart) {
     for (const d of datesInRange(rangeStart, effectiveEnd ?? rangeStart)) rangeSet.add(d);
   }
+  const [selStart, selEnd] = rangeStart && effectiveEnd
+    ? orderDates(rangeStart, effectiveEnd)
+    : [rangeStart ?? "", rangeStart ?? ""];
 
-  const isEmpty = localEntries.size === 0;
+  const isEmpty = busyDates.size === 0;
 
   if (loading) {
     return (
@@ -179,22 +157,20 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
             exit={{ opacity: 0 }}
             className="mb-4 rounded-2xl bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-300 dark:border-amber-700 px-4 py-3 text-center"
           >
-            <p className="text-sm font-bold text-amber-800 dark:text-amber-300">You haven't marked any busy dates</p>
+            <p className="text-sm font-bold text-amber-800 dark:text-amber-300">No busy dates marked yet</p>
             <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 leading-relaxed">
-              Tap a start date below, then tap an end date to mark a range as busy or maybe. Everything unmarked is assumed free.
+              Tap a start date, then an end date to mark when you're not available. Everything else is automatically assumed free.
             </p>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Range selection status bar */}
+      {/* Range status bar */}
       <AnimatePresence mode="wait">
         {rangeStart && !showActionBar && (
           <motion.div
-            key="picking-end"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
+            key="picking"
+            initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
             className="mb-3 flex items-center justify-between px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700"
           >
             <div className="flex items-center gap-2">
@@ -211,10 +187,8 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
 
         {showActionBar && rangeStart && (
           <motion.div
-            key="action-bar"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
+            key="action"
+            initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
             className="mb-3 rounded-2xl border bg-card p-3 shadow-md"
           >
             <div className="flex items-center justify-between mb-2.5">
@@ -230,20 +204,14 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
             </div>
             <div className="flex gap-2">
               <button
-                onClick={() => applyToRange("busy")}
-                className="flex-1 h-9 rounded-xl bg-red-400 hover:bg-red-500 text-white text-xs font-bold transition-colors"
+                onClick={() => applyToRange(true)}
+                className="flex-1 h-10 rounded-xl bg-red-400 hover:bg-red-500 text-white text-sm font-bold transition-colors"
               >
-                Busy
+                Mark Busy
               </button>
               <button
-                onClick={() => applyToRange("tentative")}
-                className="flex-1 h-9 rounded-xl bg-amber-400 hover:bg-amber-500 text-white text-xs font-bold transition-colors"
-              >
-                Maybe
-              </button>
-              <button
-                onClick={() => applyToRange(null)}
-                className="flex-1 h-9 rounded-xl bg-secondary hover:bg-secondary/80 text-foreground text-xs font-bold transition-colors"
+                onClick={() => applyToRange(false)}
+                className="flex-1 h-10 rounded-xl bg-secondary hover:bg-secondary/80 text-foreground text-sm font-bold transition-colors"
               >
                 Clear
               </button>
@@ -254,21 +222,15 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
 
       {/* Month nav */}
       <div className="flex items-center justify-between mb-3">
-        <button
-          onClick={() => canGoPrev && setViewMonth(m => subMonths(m, 1))}
-          disabled={!canGoPrev}
+        <button onClick={() => canGoPrev && setViewMonth(m => subMonths(m, 1))} disabled={!canGoPrev}
           className={cn("w-8 h-8 rounded-xl flex items-center justify-center transition-colors",
-            canGoPrev ? "hover:bg-secondary text-foreground" : "opacity-20 cursor-not-allowed")}
-        >
+            canGoPrev ? "hover:bg-secondary text-foreground" : "opacity-20 cursor-not-allowed")}>
           <ChevronLeft className="w-4 h-4" />
         </button>
         <span className="text-sm font-bold">{format(viewMonth, "MMMM yyyy")}</span>
-        <button
-          onClick={() => canGoNext && setViewMonth(m => addMonths(m, 1))}
-          disabled={!canGoNext}
+        <button onClick={() => canGoNext && setViewMonth(m => addMonths(m, 1))} disabled={!canGoNext}
           className={cn("w-8 h-8 rounded-xl flex items-center justify-center transition-colors",
-            canGoNext ? "hover:bg-secondary text-foreground" : "opacity-20 cursor-not-allowed")}
-        >
+            canGoNext ? "hover:bg-secondary text-foreground" : "opacity-20 cursor-not-allowed")}>
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
@@ -281,48 +243,37 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
       </div>
 
       {/* Day grid */}
-      <div
-        className="grid grid-cols-7 gap-1"
-        onMouseLeave={() => { if (!showActionBar) setHoverDay(null); }}
-      >
+      <div className="grid grid-cols-7 gap-1" onMouseLeave={() => !showActionBar && setHoverDay(null)}>
         {Array.from({ length: startPad }).map((_, i) => <div key={`p${i}`} />)}
         {days.map(day => {
           const dateStr = format(day, "yyyy-MM-dd");
           const isPast = isBefore(day, today);
-          const status = localEntries.get(dateStr);
+          const isBusy = busyDates.has(dateStr);
           const inRange = rangeSet.has(dateStr);
-          const isStartOrEnd = dateStr === rangeStart || (showActionBar && dateStr === rangeEnd);
+          const isEdge = dateStr === rangeStart || (showActionBar && dateStr === rangeEnd);
 
-          let cellClass = "";
+          let cls = "";
           if (isPast) {
-            cellClass = "opacity-25 text-muted-foreground cursor-not-allowed";
-          } else if (isStartOrEnd) {
-            cellClass = "bg-indigo-500 text-white ring-2 ring-indigo-400 scale-105 z-10";
+            cls = "opacity-25 text-muted-foreground cursor-not-allowed";
+          } else if (isEdge) {
+            cls = "bg-indigo-500 text-white ring-2 ring-indigo-400 scale-105 z-10";
           } else if (inRange) {
-            cellClass = "bg-indigo-100 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-200";
-          } else if (status === "busy") {
-            cellClass = "bg-red-400 text-white shadow-sm";
-          } else if (status === "tentative") {
-            cellClass = "bg-amber-400 text-white shadow-sm";
+            cls = "bg-indigo-100 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-200";
+          } else if (isBusy) {
+            cls = "bg-red-400 text-white shadow-sm";
           } else {
-            cellClass = cn(
-              "text-foreground transition-colors",
+            cls = cn("text-foreground",
               rangeStart && !showActionBar
-                ? "bg-secondary/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 cursor-pointer"
+                ? "bg-secondary/30 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 cursor-pointer"
                 : "bg-secondary/50 hover:bg-secondary cursor-pointer"
             );
           }
 
           return (
-            <button
-              key={dateStr}
-              disabled={isPast}
+            <button key={dateStr} disabled={isPast}
               onClick={() => !isPast && handleDayTap(dateStr)}
               onMouseEnter={() => !isPast && rangeStart && !showActionBar && setHoverDay(dateStr)}
-              className={cn(
-                "aspect-square rounded-lg flex items-center justify-center text-xs font-semibold relative",
-                cellClass
-              )}
+              className={cn("aspect-square rounded-lg flex items-center justify-center text-xs font-semibold relative transition-all", cls)}
             >
               {format(day, "d")}
             </button>
@@ -334,30 +285,18 @@ export function AvailabilityCalendar({ userId }: { userId: number }) {
       <div className="flex items-center justify-center gap-5 mt-4 text-[10px] text-muted-foreground">
         <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-secondary ring-1 ring-border" /> Free (default)</div>
         <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-red-400" /> Busy</div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-amber-400" /> Maybe</div>
       </div>
       <p className="text-center text-[10px] text-muted-foreground/60 mt-1.5">
-        Tap a start date, then an end date to mark a range
+        Tap a start date, then an end date
       </p>
 
       {/* Save button */}
       <AnimatePresence>
         {isDirty && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            className="mt-4"
-          >
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="w-full h-11 rounded-2xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
-            >
-              {saving
-                ? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                : "Save availability"
-              }
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} className="mt-4">
+            <button onClick={handleSave} disabled={saving}
+              className="w-full h-11 rounded-2xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+              {saving ? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> : "Save availability"}
             </button>
           </motion.div>
         )}

@@ -2,11 +2,13 @@ import { db } from "./db";
 import {
   groups, participants, messages, plans, planVotes,
   tripPlans, tripAlternatives, supportSignals, pipMessages, pinboardItems, bookingCommitments, deviceTokens, users,
+  userAvailability,
   type Group, type Participant, type Message, type Plan, type PlanVote,
   type TripPlan, type TripAlternative, type SupportSignal, type PipMessage, type PinboardItem,
-  type BookingCommitment, type CommitmentLevel, type DeviceToken,
+  type BookingCommitment, type CommitmentLevel, type DeviceToken, type UserAvailability,
 } from "@shared/schema";
-import { eq, desc, and, isNull } from "drizzle-orm";
+import { eq, desc, and, isNull, gte, lte, inArray } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 
 export interface IStorage {
@@ -65,6 +67,13 @@ export interface IStorage {
   // Booking Commitments
   getCommitments(groupId: number): Promise<BookingCommitment[]>;
   upsertCommitment(groupId: number, participantId: number, data: { flightBooked?: boolean; lodgingStatus?: string }): Promise<BookingCommitment>;
+
+  // User Availability
+  getUserAvailability(userId: number, start?: string, end?: string): Promise<UserAvailability[]>;
+  upsertUserAvailability(userId: number, entries: {date: string, status: string}[]): Promise<void>;
+  getGroupAvailability(groupId: number, start?: string, end?: string): Promise<{
+    participantId: number; participantName: string; userId: number; date: string; status: string;
+  }[]>;
 
   // Group management
   updateGroupName(groupId: number, name: string): Promise<Group>;
@@ -428,6 +437,60 @@ export class DatabaseStorage implements IStorage {
     await db.update(deviceTokens)
       .set({ isActive: false })
       .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.token, token)));
+  }
+
+  // === USER AVAILABILITY METHODS ===
+
+  async getUserAvailability(userId: number, start?: string, end?: string): Promise<UserAvailability[]> {
+    const conditions = [eq(userAvailability.userId, userId)];
+    if (start) conditions.push(gte(userAvailability.date, start));
+    if (end) conditions.push(lte(userAvailability.date, end));
+    return db.select().from(userAvailability).where(and(...conditions)).orderBy(userAvailability.date);
+  }
+
+  async upsertUserAvailability(userId: number, entries: {date: string, status: string}[]): Promise<void> {
+    const toUpsert = entries.filter(e => e.status !== "unset" && e.status);
+    const toDelete = entries.filter(e => e.status === "unset" || !e.status).map(e => e.date);
+
+    if (toUpsert.length > 0) {
+      await db.insert(userAvailability)
+        .values(toUpsert.map(e => ({ userId, date: e.date, status: e.status })))
+        .onConflictDoUpdate({
+          target: [userAvailability.userId, userAvailability.date],
+          set: { status: sql`excluded.status`, updatedAt: new Date() },
+        });
+    }
+    if (toDelete.length > 0) {
+      await db.delete(userAvailability).where(
+        and(eq(userAvailability.userId, userId), inArray(userAvailability.date, toDelete))
+      );
+    }
+  }
+
+  async getGroupAvailability(groupId: number, start?: string, end?: string): Promise<{
+    participantId: number; participantName: string; userId: number; date: string; status: string;
+  }[]> {
+    const groupParticipants = await db
+      .select({ id: participants.id, name: participants.name, userId: participants.userId })
+      .from(participants)
+      .where(eq(participants.groupId, groupId));
+
+    const linkedParticipants = groupParticipants.filter(p => p.userId !== null);
+    if (linkedParticipants.length === 0) return [];
+
+    const userIds = linkedParticipants.map(p => p.userId!);
+    const conditions = [inArray(userAvailability.userId, userIds)];
+    if (start) conditions.push(gte(userAvailability.date, start));
+    if (end) conditions.push(lte(userAvailability.date, end));
+
+    const avail = await db.select().from(userAvailability).where(and(...conditions));
+
+    const userToParticipant = new Map(linkedParticipants.map(p => [p.userId!, p]));
+
+    return avail.map(a => {
+      const p = userToParticipant.get(a.userId)!;
+      return { participantId: p.id, participantName: p.name, userId: a.userId, date: a.date, status: a.status };
+    });
   }
 }
 

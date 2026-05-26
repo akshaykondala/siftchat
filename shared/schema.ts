@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, boolean, real, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, boolean, real, index, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -151,6 +151,18 @@ export const deviceTokens = pgTable("device_tokens", {
   isActive: boolean("is_active").default(true),
 }, (t) => [index("idx_device_tokens_user_id").on(t.userId)]);
 
+// Per-user availability — set once on profile, flows into all trips
+export const userAvailability = pgTable("user_availability", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  date: text("date").notNull(), // "YYYY-MM-DD"
+  status: text("status").notNull(), // "available" | "busy" | "tentative"
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  unique("uq_user_availability").on(t.userId, t.date),
+  index("idx_user_availability_user_id").on(t.userId),
+]);
+
 // Pinboard items — activities/ideas added to the locked trip board
 export const pinboardItems = pgTable("pinboard_items", {
   id: serial("id").primaryKey(),
@@ -223,6 +235,7 @@ export type SupportSignal = typeof supportSignals.$inferSelect;
 export type PipMessage = typeof pipMessages.$inferSelect;
 export type PinboardItem = typeof pinboardItems.$inferSelect;
 export type DeviceToken = typeof deviceTokens.$inferSelect;
+export type UserAvailability = typeof userAvailability.$inferSelect;
 
 export type CreateGroupRequest = { name: string };
 export type JoinGroupRequest = { name: string };

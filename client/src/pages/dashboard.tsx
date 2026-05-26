@@ -11,6 +11,7 @@ import { format } from "date-fns";
 import { Plus, Calendar, Users, Lock, LogOut, ArrowRight, MapPin, Pencil, X, Trash2, MoreHorizontal, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getStoredToken } from "@/hooks/use-auth";
+import { AvailabilityCalendar } from "@/components/availability-calendar";
 
 interface TripSummary {
   id: number;
@@ -308,6 +309,7 @@ function TripCard({ trip, index, onDeleted, onRenamed }: {
 
 function ProfileModal({ onClose }: { onClose: () => void }) {
   const { user, saveAuth } = useAuth();
+  const [activeTab, setActiveTab] = useState<"profile" | "availability">("profile");
   const [name, setName] = useState(user?.name ?? "");
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? "");
   const [loading, setLoading] = useState(false);
@@ -348,47 +350,88 @@ function ProfileModal({ onClose }: { onClose: () => void }) {
         transition={{ type: "spring", stiffness: 400, damping: 30 }}
         className="fixed inset-0 flex items-center justify-center z-40 px-4"
       >
-        <div className="bg-card border border-border rounded-3xl p-8 w-full max-w-sm shadow-2xl">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-xl font-black">Edit Profile</h2>
+        <div className="bg-card border border-border rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+            <h2 className="text-xl font-black">Profile</h2>
             <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-secondary transition-colors text-muted-foreground">
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Avatar preview */}
-          <div className="flex justify-center mb-5">
-            {avatarUrl ? (
-              <img src={avatarUrl} className="w-20 h-20 rounded-full object-cover ring-4 ring-primary/20" alt="avatar" />
-            ) : (
-              <AvatarDefault name={name || "?"} size={20} />
-            )}
+          {/* Tabs */}
+          <div className="flex mx-6 mb-4 bg-secondary/50 rounded-2xl p-1 gap-1 shrink-0">
+            <button
+              onClick={() => setActiveTab("profile")}
+              className={cn(
+                "flex-1 h-8 rounded-xl text-xs font-semibold transition-all",
+                activeTab === "profile"
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Profile
+            </button>
+            <button
+              onClick={() => setActiveTab("availability")}
+              className={cn(
+                "flex-1 h-8 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5",
+                activeTab === "availability"
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Calendar className="w-3 h-3" /> Availability
+            </button>
           </div>
 
-          <form onSubmit={handleSave} className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground mb-1 block">Display Name</label>
-              <Input
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="Your name"
-                className="h-11 rounded-2xl bg-secondary/40 border-transparent focus:bg-background focus:border-primary/20"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground mb-1 block">Avatar URL <span className="font-normal opacity-60">(optional)</span></label>
-              <Input
-                value={avatarUrl}
-                onChange={e => setAvatarUrl(e.target.value)}
-                placeholder="https://..."
-                className="h-11 rounded-2xl bg-secondary/40 border-transparent focus:bg-background focus:border-primary/20"
-              />
-            </div>
-            {error && <p className="text-sm text-destructive text-center">{error}</p>}
-            <Button type="submit" className="w-full rounded-2xl h-11 font-semibold" isLoading={loading} disabled={!name.trim()}>
-              Save changes
-            </Button>
-          </form>
+          {/* Tab content */}
+          <div className="overflow-y-auto flex-1 scrollbar-hide">
+            {activeTab === "profile" ? (
+              <div className="px-6 pb-6">
+                {/* Avatar preview */}
+                <div className="flex justify-center mb-5">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} className="w-20 h-20 rounded-full object-cover ring-4 ring-primary/20" alt="avatar" />
+                  ) : (
+                    <AvatarDefault name={name || "?"} size={20} />
+                  )}
+                </div>
+
+                <form onSubmit={handleSave} className="space-y-3">
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1 block">Display Name</label>
+                    <Input
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="Your name"
+                      className="h-11 rounded-2xl bg-secondary/40 border-transparent focus:bg-background focus:border-primary/20"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1 block">Avatar URL <span className="font-normal opacity-60">(optional)</span></label>
+                    <Input
+                      value={avatarUrl}
+                      onChange={e => setAvatarUrl(e.target.value)}
+                      placeholder="https://..."
+                      className="h-11 rounded-2xl bg-secondary/40 border-transparent focus:bg-background focus:border-primary/20"
+                    />
+                  </div>
+                  {error && <p className="text-sm text-destructive text-center">{error}</p>}
+                  <Button type="submit" className="w-full rounded-2xl h-11 font-semibold" isLoading={loading} disabled={!name.trim()}>
+                    Save changes
+                  </Button>
+                </form>
+              </div>
+            ) : (
+              <div className="px-6 pb-6">
+                <p className="text-[11px] text-muted-foreground mb-4 leading-relaxed">
+                  Mark your free and busy dates once — Pip will use this across all your trips to find windows that work for everyone.
+                </p>
+                {user?.id && <AvailabilityCalendar userId={user.id} />}
+              </div>
+            )}
+          </div>
         </div>
       </motion.div>
     </>

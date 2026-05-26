@@ -5,6 +5,7 @@ import { useGroup, useJoinGroup } from "@/hooks/use-groups";
 import { useMessages, useSendMessage } from "@/hooks/use-messages";
 import { useTripPlan, useTripAlternatives, useVoteAlternative, useUpdateAttendance, useMyAttendance, useAllAttendance, useLockTrip, useUnlockTrip, usePinboard, useAddPin, useRemovePin } from "@/hooks/use-trip";
 import { usePresence } from "@/hooks/use-presence";
+import { GroupAvailabilityPanel } from "@/components/group-availability-panel";
 import { Button } from "@/components/ui/button-animated";
 import { Input } from "@/components/ui/input";
 import { ShinyCard } from "@/components/ui/shiny-card";
@@ -1710,6 +1711,16 @@ function TravelWorkspace({
               <TripProgressBar
                 trip={trip}
                 commitments={progressCommitments}
+                participantCount={allParticipants.length}
+              />
+            </div>
+          )}
+
+          {/* Group Availability */}
+          {!isLocked && allParticipants.length > 0 && (
+            <div>
+              <GroupAvailabilityPanel
+                groupId={groupId}
                 participantCount={allParticipants.length}
               />
             </div>

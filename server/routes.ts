@@ -814,6 +814,75 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  // === AVAILABILITY ===
+
+  app.get("/api/availability/:userId", authMiddleware, async (req, res) => {
+    const userId = Number(req.params.userId);
+    const { start, end } = req.query as { start?: string; end?: string };
+    try {
+      const avail = await storage.getUserAvailability(userId, start, end);
+      res.json(avail);
+    } catch {
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/availability", authMiddleware, async (req, res) => {
+    const userId = (req as any).userId;
+    const entries = req.body;
+    if (!Array.isArray(entries)) return res.status(400).json({ message: "Expected array of {date, status}" });
+    try {
+      await storage.upsertUserAvailability(userId, entries);
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.get("/api/groups/:groupId/availability", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { start, end } = req.query as { start?: string; end?: string };
+    try {
+      const groupParticipants = await storage.getParticipantsByGroup(groupId);
+      const entries = await storage.getGroupAvailability(groupId, start, end);
+      const bestWindows = computeBestAvailabilityWindows(entries, groupParticipants.length);
+      const userIds = new Set(entries.map(e => e.userId));
+      const linkedCount = groupParticipants.filter(p => p.userId !== null).length;
+      const setAvailabilityCount = userIds.size;
+      res.json({ entries, bestWindows, participantCount: groupParticipants.length, linkedCount, setAvailabilityCount });
+    } catch {
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // Pip sends a nudge to participants who haven't set availability
+  app.post("/api/groups/:groupId/availability-nudge", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    try {
+      const groupParticipants = await storage.getParticipantsByGroup(groupId);
+      const today = new Date().toISOString().split("T")[0];
+      const endSearch = new Date(Date.now() + 90 * 86400000).toISOString().split("T")[0];
+      const entries = await storage.getGroupAvailability(groupId, today, endSearch);
+      const setUserIds = new Set(entries.map(e => e.userId));
+      const notSet = groupParticipants.filter(p => p.userId && !setUserIds.has(p.userId));
+
+      if (notSet.length === 0) {
+        return res.json({ ok: true, message: "Everyone already set their availability!" });
+      }
+
+      const names = notSet.map(p => p.name);
+      const callout = names.length === 1
+        ? `${names[0]}`
+        : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+      await storage.createPipMessage(groupId,
+        `Hey ${callout} — can you add your availability? Tap your avatar on the home screen and fill in your calendar. Once everyone's in, I'll find the best dates for the group automatically 📅`
+      );
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
   // === LINK PARTICIPANT TO USER when joining ===
   // (handled inline in the join route — patching here via middleware on group join)
 
@@ -985,6 +1054,52 @@ async function respondToPipMention(groupId: number, question: string): Promise<v
   if (isFlightInfoQuery && plan?.destination && plan?.startDate && plan?.endDate) {
     // Force analyzeTripChat to post the flight rec (bypasses cooldown, allows pip messages)
     analyzeTripChat(groupId, true).catch(err => console.error("Flight info sync failed:", err));
+    clearPipThinking(groupId);
+    return;
+  }
+
+  // ── Availability query — skip LLM, compute group overlap and suggest windows ─
+  const isAvailabilityQuery = /\b(availab|when\s+(is|are)\s+everyone|who('?s|\s+is)\s+(free|busy|available)|best\s+(dates?|time|window)|overlap|schedule|calendar)\b/i.test(question);
+  if (isAvailabilityQuery) {
+    const today = new Date().toISOString().split("T")[0];
+    const endSearch = new Date(Date.now() + 90 * 86400000).toISOString().split("T")[0];
+    const groupParticipants = await storage.getParticipantsByGroup(groupId);
+    const entries = await storage.getGroupAvailability(groupId, today, endSearch);
+    const linkedCount = groupParticipants.filter(p => p.userId !== null).length;
+    const setCount = new Set(entries.map(e => e.userId)).size;
+    const notSetNames = groupParticipants.filter(p => p.userId && !entries.some(e => e.userId === p.userId)).map(p => p.name);
+
+    if (setCount === 0 && linkedCount === 0) {
+      await postPipMessage(groupId, `No one's set their availability yet! Tap your avatar on the home screen to open your profile and set your free/busy dates. Once everyone does, I can find the best windows automatically.`);
+      clearPipThinking(groupId);
+      return;
+    }
+
+    if (notSetNames.length > 0) {
+      const callout = notSetNames.length === 1
+        ? `${notSetNames[0]} hasn't set their availability yet`
+        : `${notSetNames.slice(0, -1).join(", ")} and ${notSetNames[notSetNames.length - 1]} haven't set their availability yet`;
+      await postPipMessage(groupId, `${callout} — head to your profile on the home screen to add your dates. Once everyone's in, I can suggest the best windows for the trip! 📅`);
+      clearPipThinking(groupId);
+      return;
+    }
+
+    const bestWindows = computeBestAvailabilityWindows(entries, groupParticipants.length);
+    if (bestWindows.length === 0) {
+      await postPipMessage(groupId, `I checked everyone's availability but couldn't find a stretch of 3+ days where most people are free. Ask the crew to update their calendars in their profiles — or someone might need to mark a few "tentative" days.`);
+      clearPipThinking(groupId);
+      return;
+    }
+
+    const windowLines = bestWindows.map((w, i) => {
+      const start = new Date(w.startDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const end = new Date(w.endDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const pct = Math.round(w.score * 100);
+      const suffix = w.busyNames.length > 0 ? ` (${w.busyNames.join(", ")} ${w.busyNames.length === 1 ? "is" : "are"} busy)` : " — everyone free";
+      return `${i + 1}. ${start}–${end}: ${pct}% overlap${suffix}`;
+    }).join("\n");
+
+    await postPipMessage(groupId, `Based on everyone's availability, here are the best windows:\n\n${windowLines}\n\nWant me to lock in one of these? Just say which one and I'll set the dates.`);
     clearPipThinking(groupId);
     return;
   }
@@ -1759,7 +1874,7 @@ async function runPhaseGuidance(groupId: number, participantsList: { id: number;
 
   const phaseMessages: Record<GuidedPhase, string | null> = {
     kickoff: "Hey crew! Drop your ideas — where are you thinking? Once you pick a spot I can pull up flights and places to stay. 🌍",
-    destination: `${dest} — solid pick. When are you going? Dates are the one thing that actually unblocks everything else. Sooner you lock them in, cheaper the flights.`,
+    destination: `${dest} — solid pick. Now figure out dates. Pro tip: set your availability in your profile (tap your avatar on the home screen) — once everyone does, I'll find the windows where you all overlap. Sooner you lock dates, cheaper the flights.`,
     deadlines: `${dates} locked in — nice. One thing that actually makes trips happen: set a "book by" date for flights. Just say @pip set flight deadline [date] or tap the deadline card in the trip panel. Without a hard date, people procrastinate forever. ⏰`,
     dates: `Good — who's actually in? Tap your status on the right 👉 Flight prices only go up from here, so get everyone committed before someone bails.`,
     crew: `Everyone's in! Book flights now while prices are still reasonable — they creep up every day you wait. Drop a link or tell me what you're seeing and I'll help. ✈️`,
@@ -1884,6 +1999,94 @@ async function runCommitmentNudge(groupId: number, participantsList: { id: numbe
 
   await postPipMessage(groupId, nudge);
   await storage.upsertTripPlan(groupId, { lastNudgeAt: new Date() } as any);
+}
+
+// ============================================================
+//  AVAILABILITY HELPERS
+// ============================================================
+
+export interface BestWindow {
+  startDate: string;
+  endDate: string;
+  availableCount: number;
+  totalParticipants: number;
+  score: number; // 0-1
+  availableNames: string[];
+  busyNames: string[];
+}
+
+function computeBestAvailabilityWindows(
+  entries: { participantId: number; participantName: string; userId: number; date: string; status: string }[],
+  totalParticipants: number,
+  minDays = 3,
+  maxWindows = 3
+): BestWindow[] {
+  if (entries.length === 0) return [];
+
+  // Build date → {available, busy, tentative} maps
+  const dateMap = new Map<string, { available: Set<string>; busy: Set<string>; tentative: Set<string> }>();
+  for (const e of entries) {
+    if (!dateMap.has(e.date)) {
+      dateMap.set(e.date, { available: new Set(), busy: new Set(), tentative: new Set() });
+    }
+    const bucket = dateMap.get(e.date)!;
+    if (e.status === "available") bucket.available.add(e.participantName);
+    else if (e.status === "busy") bucket.busy.add(e.participantName);
+    else if (e.status === "tentative") bucket.tentative.add(e.participantName);
+  }
+
+  // Score each date (0 = nobody available, 1 = everyone available)
+  const dateScores = new Map<string, number>();
+  for (const [date, b] of Array.from(dateMap.entries())) {
+    const avail = b.available.size + b.tentative.size * 0.5;
+    const denom = Math.max(totalParticipants, b.available.size + b.busy.size + b.tentative.size);
+    dateScores.set(date, denom > 0 ? avail / denom : 0);
+  }
+
+  // Sort all dates
+  const allDates = Array.from(dateMap.keys()).sort();
+
+  // Find consecutive windows with avg score above threshold
+  const windows: BestWindow[] = [];
+  let i = 0;
+  while (i < allDates.length) {
+    const score = dateScores.get(allDates[i]) ?? 0;
+    if (score >= 0.5) {
+      let j = i;
+      while (j < allDates.length) {
+        // Check if next date is consecutive
+        const curr = new Date(allDates[j] + "T00:00:00");
+        const next = new Date(allDates[j + 1] + "T00:00:00");
+        const consecutive = j + 1 < allDates.length &&
+          next.getTime() - curr.getTime() === 86400000 &&
+          (dateScores.get(allDates[j + 1]) ?? 0) >= 0.5;
+        if (!consecutive) break;
+        j++;
+      }
+      if (j - i + 1 >= minDays) {
+        const windowDates = allDates.slice(i, j + 1);
+        const windowScores = windowDates.map(d => dateScores.get(d) ?? 0);
+        const avgScore = windowScores.reduce((s, v) => s + v, 0) / windowScores.length;
+
+        // Collect names for first date of window (representative)
+        const firstBucket = dateMap.get(windowDates[0])!;
+        windows.push({
+          startDate: windowDates[0],
+          endDate: windowDates[windowDates.length - 1],
+          availableCount: firstBucket.available.size,
+          totalParticipants,
+          score: avgScore,
+          availableNames: Array.from(firstBucket.available),
+          busyNames: Array.from(firstBucket.busy),
+        });
+      }
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+
+  return windows.sort((a, b) => b.score - a.score).slice(0, maxWindows);
 }
 
 // ============================================================

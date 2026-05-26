@@ -223,7 +223,7 @@ export function GroupAvailabilityPanel({
           ))}
         </div>
 
-        {/* Day cells */}
+        {/* Day cells — clear = everyone free (default), red fill = busy conflict */}
         <div className="grid grid-cols-7 gap-0.5">
           {Array.from({ length: startPad }).map((_, i) => <div key={`pad-${i}`} />)}
           {days.map(day => {
@@ -231,11 +231,13 @@ export function GroupAvailabilityPanel({
             const bucket = dateMap.get(dateStr);
             const isPast = isBefore(day, today);
             const isBest = isBestWindow(dateStr, bestWindows);
-            const total = participantCount || 1;
-            const availCount = bucket ? bucket.available.length + Math.round(bucket.tentative.length * 0.5) : 0;
+            // Use linkedCount from API if available, fall back to participantCount
+            const denom = (data?.linkedCount || participantCount) || 1;
             const busyCount = bucket ? bucket.busy.length : 0;
-            const availFrac = availCount / total;
-            const busyFrac = busyCount / total;
+            const tentativeCount = bucket ? bucket.tentative.length : 0;
+            // Conflict score: 0 = everyone free, 1 = everyone busy
+            const conflictFrac = (busyCount + tentativeCount * 0.5) / denom;
+            const hasConflict = conflictFrac > 0;
 
             return (
               <button
@@ -250,22 +252,12 @@ export function GroupAvailabilityPanel({
                 disabled={isPast}
                 style={{ minHeight: 32 }}
               >
-                {/* Color fill bar — stacked: available (green bottom up) */}
-                {bucket && (
-                  <div className="absolute inset-0 flex flex-col-reverse pointer-events-none">
-                    {availFrac > 0 && (
-                      <div
-                        className="bg-violet-400/40 dark:bg-violet-600/40 shrink-0"
-                        style={{ height: `${Math.round(availFrac * 100)}%` }}
-                      />
-                    )}
-                    {busyFrac > 0 && (
-                      <div
-                        className="bg-red-400/30 dark:bg-red-500/30 shrink-0"
-                        style={{ height: `${Math.round(busyFrac * 100)}%` }}
-                      />
-                    )}
-                  </div>
+                {/* Conflict fill: grows from bottom, red = busy */}
+                {hasConflict && (
+                  <div
+                    className="absolute bottom-0 inset-x-0 bg-red-400/50 dark:bg-red-500/40 pointer-events-none"
+                    style={{ height: `${Math.round(conflictFrac * 100)}%` }}
+                  />
                 )}
                 <span className="relative z-10 pt-0.5 text-foreground/80">{format(day, "d")}</span>
               </button>
@@ -291,40 +283,51 @@ export function GroupAvailabilityPanel({
                 <X className="w-3.5 h-3.5 text-muted-foreground" />
               </button>
             </div>
-            {selectedDayData ? (
-              <div className="space-y-1">
-                {selectedDayData.available.length > 0 && (
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2.5 h-2.5 rounded-full bg-violet-500 shrink-0" />
-                    <span className="text-[10px] text-muted-foreground">Free: <span className="text-foreground font-medium">{selectedDayData.available.join(", ")}</span></span>
-                  </div>
-                )}
-                {selectedDayData.tentative.length > 0 && (
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
-                    <span className="text-[10px] text-muted-foreground">Maybe: <span className="text-foreground font-medium">{selectedDayData.tentative.join(", ")}</span></span>
-                  </div>
-                )}
-                {selectedDayData.busy.length > 0 && (
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2.5 h-2.5 rounded-full bg-red-400 shrink-0" />
-                    <span className="text-[10px] text-muted-foreground">Busy: <span className="text-foreground font-medium">{selectedDayData.busy.join(", ")}</span></span>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-[10px] text-muted-foreground italic">No availability set for this date.</p>
-            )}
+            {(() => {
+              const busyNames = selectedDayData?.busy ?? [];
+              const tentativeNames = selectedDayData?.tentative ?? [];
+              const explicitlyMarked = new Set([...busyNames, ...tentativeNames, ...(selectedDayData?.available ?? [])]);
+              // Everyone not explicitly marked is free by default
+              const implicitlyFreeNames = data?.entries
+                ? Array.from(new Set(data.entries.map(e => e.participantName))).filter(n => !explicitlyMarked.has(n))
+                : [];
+              const allFreeNames = [...(selectedDayData?.available ?? []), ...implicitlyFreeNames];
+
+              return (
+                <div className="space-y-1">
+                  {allFreeNames.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2.5 h-2.5 rounded-full bg-secondary ring-1 ring-border shrink-0" />
+                      <span className="text-[10px] text-muted-foreground">Free: <span className="text-foreground font-medium">{allFreeNames.join(", ")}</span></span>
+                    </div>
+                  )}
+                  {tentativeNames.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
+                      <span className="text-[10px] text-muted-foreground">Maybe: <span className="text-foreground font-medium">{tentativeNames.join(", ")}</span></span>
+                    </div>
+                  )}
+                  {busyNames.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2.5 h-2.5 rounded-full bg-red-400 shrink-0" />
+                      <span className="text-[10px] text-muted-foreground">Busy: <span className="text-foreground font-medium">{busyNames.join(", ")}</span></span>
+                    </div>
+                  )}
+                  {allFreeNames.length === 0 && tentativeNames.length === 0 && busyNames.length === 0 && (
+                    <p className="text-[10px] text-muted-foreground italic">No one's set their availability yet.</p>
+                  )}
+                </div>
+              );
+            })()}
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Legend */}
       <div className="flex items-center justify-center gap-4 px-3 py-2 border-t text-[9px] text-muted-foreground">
-        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-violet-400" /> Free</div>
-        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-red-400" /> Busy</div>
-        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Maybe</div>
-        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full ring-1 ring-emerald-400" /> Best window</div>
+        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm bg-secondary ring-1 ring-border" /> Free (default)</div>
+        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm bg-red-400/50" /> Busy</div>
+        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-sm ring-1 ring-emerald-400" /> Best window</div>
       </div>
     </div>
   );

@@ -845,10 +845,13 @@ export async function registerRoutes(
     try {
       const groupParticipants = await storage.getParticipantsByGroup(groupId);
       const entries = await storage.getGroupAvailability(groupId, start, end);
-      const bestWindows = computeBestAvailabilityWindows(entries, groupParticipants.length);
       const userIds = new Set(entries.map(e => e.userId));
       const linkedCount = groupParticipants.filter(p => p.userId !== null).length;
       const setAvailabilityCount = userIds.size;
+      // Only compute best windows if at least one person has marked some availability
+      const bestWindows = setAvailabilityCount > 0
+        ? computeBestAvailabilityWindows(entries, linkedCount)
+        : [];
       res.json({ entries, bestWindows, participantCount: groupParticipants.length, linkedCount, setAvailabilityCount });
     } catch {
       res.status(500).json({ message: "Internal Server Error" });
@@ -1095,8 +1098,8 @@ async function respondToPipMention(groupId: number, question: string): Promise<v
       const start = new Date(w.startDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const end = new Date(w.endDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const pct = Math.round(w.score * 100);
-      const suffix = w.busyNames.length > 0 ? ` (${w.busyNames.join(", ")} ${w.busyNames.length === 1 ? "is" : "are"} busy)` : " — everyone free";
-      return `${i + 1}. ${start}–${end}: ${pct}% overlap${suffix}`;
+      const suffix = w.busyNames.length > 0 ? ` (${w.busyNames.join(", ")} ${w.busyNames.length === 1 ? "is" : "are"} busy)` : " — no conflicts";
+      return `${i + 1}. ${start}–${end}: ${pct}% free${suffix}`;
     }).join("\n");
 
     await postPipMessage(groupId, `Based on everyone's availability, here are the best windows:\n\n${windowLines}\n\nWant me to lock in one of these? Just say which one and I'll set the dates.`);
@@ -2017,13 +2020,14 @@ export interface BestWindow {
 
 function computeBestAvailabilityWindows(
   entries: { participantId: number; participantName: string; userId: number; date: string; status: string }[],
-  totalParticipants: number,
+  linkedParticipantCount: number,
   minDays = 3,
   maxWindows = 3
 ): BestWindow[] {
-  if (entries.length === 0) return [];
+  // No data = no windows (can't tell free from unknown)
+  if (entries.length === 0 || linkedParticipantCount === 0) return [];
 
-  // Build date → {available, busy, tentative} maps
+  // Build date → {busy, tentative} maps. Unset days = free by default.
   const dateMap = new Map<string, { available: Set<string>; busy: Set<string>; tentative: Set<string> }>();
   for (const e of entries) {
     if (!dateMap.has(e.date)) {
@@ -2035,16 +2039,30 @@ function computeBestAvailabilityWindows(
     else if (e.status === "tentative") bucket.tentative.add(e.participantName);
   }
 
-  // Score each date (0 = nobody available, 1 = everyone available)
+  // Score = 1 - (busyFraction). Unset days score 1.0 (everyone free).
   const dateScores = new Map<string, number>();
   for (const [date, b] of Array.from(dateMap.entries())) {
-    const avail = b.available.size + b.tentative.size * 0.5;
-    const denom = Math.max(totalParticipants, b.available.size + b.busy.size + b.tentative.size);
-    dateScores.set(date, denom > 0 ? avail / denom : 0);
+    const conflictScore = (b.busy.size + b.tentative.size * 0.5) / linkedParticipantCount;
+    dateScores.set(date, 1 - conflictScore);
   }
 
-  // Sort all dates
-  const allDates = Array.from(dateMap.keys()).sort();
+  // Extend score to all dates in range (fill gaps with score=1.0 for days nobody marked busy)
+  // Find the min and max dates in our dataset to build a full range
+  const allKnownDates = Array.from(dateMap.keys()).sort();
+  if (allKnownDates.length === 0) return [];
+  const minDate = allKnownDates[0];
+  const maxDate = allKnownDates[allKnownDates.length - 1];
+
+  // Generate every date in range
+  const allDates: string[] = [];
+  let curr = new Date(minDate + "T00:00:00");
+  const endDate = new Date(maxDate + "T00:00:00");
+  while (curr <= endDate) {
+    const ds = curr.toISOString().split("T")[0];
+    allDates.push(ds);
+    if (!dateScores.has(ds)) dateScores.set(ds, 1.0); // no conflict = everyone free
+    curr = new Date(curr.getTime() + 86400000);
+  }
 
   // Find consecutive windows with avg score above threshold
   const windows: BestWindow[] = [];

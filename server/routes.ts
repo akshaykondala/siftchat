@@ -57,10 +57,10 @@ function extractJsonObject(text: string): any {
 const EVENT_CATEGORIES = ["music", "nightlife", "festival", "market", "food", "sports", "art", "seasonal", "other"];
 
 // ─── Event Radar ───────────────────────────────────────────────────────────────
-// Web-search-grounded scan for time-specific local events during the trip dates.
-// This is the keyless (OpenAI web search) half of the hybrid plan; ticketed-event
-// APIs slot in behind the same TripEvent shape later.
-async function runEventRadarScan(plan: TripPlan): Promise<TripEvent[]> {
+// Hybrid scan for time-specific local events during the trip dates. Two sources,
+// both behind the same TripEvent shape: structured ticketed events (Ticketmaster)
+// + the long tail via OpenAI web search. Events are a BONUS, never the planner core.
+async function runWebEventScan(plan: TripPlan): Promise<TripEvent[]> {
   const destination = plan.destination!;
   const start = plan.startDate || null;
   const end = plan.endDate || null;
@@ -123,6 +123,81 @@ Return ONLY a JSON object of this shape:
   const seen = new Set<string>();
   return normalized
     .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 30);
+}
+
+// Map a Ticketmaster Discovery API "segment" to our category vocabulary.
+function tmSegmentToCategory(segment: string | undefined): string {
+  switch ((segment || "").toLowerCase()) {
+    case "music": return "music";
+    case "sports": return "sports";
+    case "arts & theatre": return "art";
+    case "film": return "art";
+    default: return "other";
+  }
+}
+
+// Structured ticketed events from the Ticketmaster Discovery API.
+// No-ops gracefully (returns []) when TICKETMASTER_API_KEY isn't set.
+async function fetchTicketmasterEvents(plan: TripPlan): Promise<TripEvent[]> {
+  const key = process.env.TICKETMASTER_API_KEY;
+  if (!key || !plan.destination) return [];
+  try {
+    const city = plan.destination.split(",")[0].trim();
+    const params = new URLSearchParams({ apikey: key, city, size: "40", sort: "date,asc" });
+    if (plan.startDate) params.set("startDateTime", `${plan.startDate}T00:00:00Z`);
+    if (plan.endDate) params.set("endDateTime", `${plan.endDate}T23:59:59Z`);
+    const resp = await fetch(`https://app.ticketmaster.com/discovery/v2/events.json?${params.toString()}`);
+    if (!resp.ok) return [];
+    const data: any = await resp.json();
+    const events: any[] = data?._embedded?.events ?? [];
+    return events.map((ev): TripEvent | null => {
+      const date = ev?.dates?.start?.localDate ? String(ev.dates.start.localDate).slice(0, 10) : null;
+      if (!ev?.name || !date) return null;
+      const venue = ev?._embedded?.venues?.[0];
+      const segment = ev?.classifications?.[0]?.segment?.name;
+      const localTime: string | undefined = ev?.dates?.start?.localTime;
+      const price = ev?.priceRanges?.[0];
+      return {
+        id: createHash("sha1").update(`tm|${ev.id ?? ev.name}|${date}`).digest("hex").slice(0, 12),
+        title: String(ev.name).slice(0, 160),
+        category: tmSegmentToCategory(segment),
+        date,
+        endDate: ev?.dates?.end?.localDate ? String(ev.dates.end.localDate).slice(0, 10) : null,
+        timeText: localTime ? localTime.slice(0, 5) : null,
+        venue: venue?.name ? String(venue.name).slice(0, 120) : null,
+        neighborhood: venue?.city?.name ? String(venue.city.name).slice(0, 80) : null,
+        description: ev?.classifications?.[0]?.genre?.name ? `${segment ?? "Event"} · ${ev.classifications[0].genre.name}` : (segment ?? "Live event"),
+        whyNotable: null,
+        priceText: price ? `${price.currency === "USD" ? "$" : ""}${Math.round(price.min)}${price.max && price.max !== price.min ? `–${Math.round(price.max)}` : ""}` : null,
+        bookByText: "Tickets on sale now",
+        url: ev?.url ? String(ev.url).slice(0, 500) : null,
+        source: "Ticketmaster",
+      };
+    }).filter((e): e is TripEvent => e !== null);
+  } catch (e) {
+    console.error("ticketmaster fetch error:", e);
+    return [];
+  }
+}
+
+// Orchestrate the hybrid scan: structured (Ticketmaster) + long-tail (web search),
+// merged behind one TripEvent list. Ticketed entries win on collision (real links).
+async function runEventRadarScan(plan: TripPlan): Promise<TripEvent[]> {
+  const [tmEvents, webEvents] = await Promise.all([
+    fetchTicketmasterEvents(plan),
+    runWebEventScan(plan),
+  ]);
+
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const byKey = new Map<string, TripEvent>();
+  // Ticketmaster first so it takes priority on duplicate title+date.
+  for (const e of [...tmEvents, ...webEvents]) {
+    const key = `${norm(e.title).slice(0, 24)}|${e.date}`;
+    if (!byKey.has(key)) byKey.set(key, e);
+  }
+  return Array.from(byKey.values())
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 30);
 }

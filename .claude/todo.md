@@ -2,7 +2,7 @@
 - [ ] Mobile UI overhaul — full audit of all screens (dashboard, auth, group header spacing) on device
 - [ ] Rebuild Xcode app after `npx cap sync ios` — open Xcode, Debug signing, add Push Notifications + Background Modes capabilities, select iPhone, hit Run ▶
 - [ ] **Itinerary: Per-block autonomy override** — let a single day/block override the global dial (e.g. trip is "Plan it all" but Saturday evening is "we vote"). Global dial + inline edit shipped; per-block override deferred from first pass.
-- [ ] **Itinerary: Event Radar ticketed APIs** — layer Ticketmaster/SeatGeek/Bandsintown/RA/Songkick behind the TripEvent interface. NOTE: events stay a BONUS ("oh btw there's an event here"), never a primary planner driver.
+- [ ] **Itinerary: more ticketed-event APIs** — add SeatGeek / Bandsintown / RA / Songkick behind the TripEvent interface (Ticketmaster already wired). Events stay a BONUS, never a primary planner driver. NEEDS: set `TICKETMASTER_API_KEY` in Railway + local `.env` to activate Ticketmaster (free key from developer.ticketmaster.com).
 - [ ] **Itinerary: Event Radar proactive scan** — re-scan at T-2wk / T-1wk; ping ONLY for big new announcements, sellout risk, or book-by deadlines (max ~1/scan).
 
 ## 🟠 P1 — High
@@ -27,6 +27,7 @@
 ## ⚪ P3 — Low / Nice-to-have
 
 ## ✅ Done
+- [x] Itinerary: Event Radar — Ticketmaster source — hybrid scan now merges structured ticketed events (real ticket links/prices) with web-search long tail; degrades gracefully without API key
 - [x] Itinerary: Event Radar (web-search half) — date+location event scan woven in as a bonus, "Happening while you're there" feed with source links, auto-scan + Pip ping
 - [x] Itinerary: Autonomy dial — global Plan-it-all / Suggest-&-vote / I'll-drive modes; one-tap full plan, blank scaffold + inline block editing for manual, vote flow gated by mode
 - [x] Group availability panel collapsed by default in trip sidebar — one-tap reveal button, Pip uses it not users

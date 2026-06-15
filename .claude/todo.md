@@ -9,7 +9,7 @@
 - [ ] Pip as real action-taker — Pip searches flights, pulls Airbnb listings in budget, drops vote cards — does things, doesn't just chat
 - [ ] One-tap group decision cards — structured micro-decisions (pick a weekend, pick a city) with voting that actually resolves
 - [ ] "Trip alive vs dead" status — brutal public health bar; if 3/5 people haven't tapped "I'm in" after 48hrs, trip auto-archives with a RIP card
-- [ ] **Itinerary: Logistics auto-solver** — per-block travel time + geo-clustering, reservation lead-times, parking, hours, cash-only, dress code; wire "book-by" into deadlines/nudges
+- [ ] **Itinerary: per-reservation reminders** — auto Pip nudges as each reservation's book-by date approaches (logistics auto-solver surfaces the list + one heads-up; per-item scheduled reminders still TODO, needs the proactive scheduler)
 - [ ] **Itinerary: Source citations + social proof** — each event/spot links to its source (TikTok/IG/article) with "trending" signal so it feels current, not generic
 - [ ] **Itinerary: Weather- & crew-aware scheduling** — forecast-driven indoor alternates + sunset times; respect each person's availability (late arrival / early exit auto-trims day 1 / last day)
 
@@ -27,6 +27,7 @@
 ## ⚪ P3 — Low / Nice-to-have
 
 ## ✅ Done
+- [x] Itinerary: Logistics auto-solver — per-block travel time, reservations + lead-time, parking, hours, heads-ups (cash-only/dress code/sells out); geo-orders each day; "Lock these in early" reservations panel; works at generation + a non-destructive "Add logistics" enrich pass on existing itineraries
 - [x] Itinerary: Event Radar — Ticketmaster source — hybrid scan now merges structured ticketed events (real ticket links/prices) with web-search long tail; degrades gracefully without API key
 - [x] Itinerary: Event Radar (web-search half) — date+location event scan woven in as a bonus, "Happening while you're there" feed with source links, auto-scan + Pip ping
 - [x] Itinerary: Autonomy dial — global Plan-it-all / Suggest-&-vote / I'll-drive modes; one-tap full plan, blank scaffold + inline block editing for manual, vote flow gated by mode

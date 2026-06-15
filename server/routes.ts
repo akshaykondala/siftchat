@@ -1207,15 +1207,29 @@ Return ONLY valid JSON matching this exact structure:
     {
       "dayNumber": number,
       "date": string or null,
-      "morning": { "activity": string, "cost": string, "transport": string, "notes": string },
-      "afternoon": { "activity": string, "cost": string, "transport": string, "notes": string },
-      "evening": { "activity": string, "cost": string, "transport": string, "notes": string }
+      "morning": { "activity": string, "cost": string, "transport": string, "notes": string, "logistics": { "travel": string, "reserve": string, "parking": string, "hours": string, "headsUp": string } },
+      "afternoon": { ...same shape... },
+      "evening": { ...same shape... }
     }
   ],
+  "reservations": [ { "what": string, "leadTime": string, "bookBy": "YYYY-MM-DD or null", "dayNumber": number } ],
   "totalBudgetPerPerson": string,
   "generalTips": string
 }
 Be specific — name real restaurants, attractions, neighborhoods. Not generic tourist advice.
+
+LOGISTICS (solve the little confusions for them). For every block, fill "logistics":
+- "travel": how to get there from the previous block + rough travel time (e.g. "10 min walk from breakfast", "15 min drive / $12 rideshare"). "" for the first block.
+- "reserve": if it needs a reservation/ticket, say how far ahead (e.g. "Reserve ~2 weeks ahead on Resy"); else "".
+- "parking": parking reality if driving (e.g. "Street parking tough — use the garage on 5th"); else "".
+- "hours": opening hours or best time to avoid crowds (e.g. "Opens 9am, go early"); else "".
+- "headsUp": one gotcha if any — cash-only, dress code, sells out, long lines, 21+, closed Mondays; else "".
+Keep each field short (under ~12 words). Use "" when not applicable — never invent.
+
+GEOGRAPHY: order each day's three blocks to minimize backtracking — cluster nearby neighborhoods together so the crew isn't crisscrossing town. Mention the neighborhood in the activity.
+
+RESERVATIONS: also collect everything that must be booked in advance into the top-level "reservations" array, soonest lead-time first, with the day it's for. If nothing needs advance booking, return [].
+
 Build the plan around the group's vibe and must-dos FIRST — that is the backbone. Any "Live events during the trip" listed below are an optional BONUS, not the plan's foundation: only mention one if it happens to land on a day and genuinely fits what the group already wants to do. If you include one, add it lightly to that block's "notes" as "🎟️ Bonus: <event>" — never reshape the day around it, and never feel obligated to use any of them.`;
 
       // Event Radar results (if scanned) — surfaced only as an optional bonus, never the backbone.
@@ -1238,7 +1252,7 @@ Off-limits: ${prefs.offLimits ?? "none"}${eventsBlock}`;
         model: "gpt-4o",
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
         response_format: { type: "json_object" },
-        max_tokens: 2500,
+        max_tokens: 4000,
       });
 
       const raw = completion.choices[0]?.message?.content ?? "{}";
@@ -1249,6 +1263,62 @@ Off-limits: ${prefs.offLimits ?? "none"}${eventsBlock}`;
     } catch (e) {
       console.error("generate-itinerary error:", e);
       res.status(500).json({ message: "Failed to generate itinerary" });
+    }
+  });
+
+  // ─── Logistics auto-solver: add travel/reservation/parking/hours/heads-up to an
+  //     existing itinerary without rebuilding it (keeps activities, votes, edits). ──
+  app.post("/api/groups/:groupId/enrich-logistics", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId } = req.body ?? {};
+    if (await blockIfGuest(participantId, res)) return;
+    try {
+      const plan = await storage.getTripPlanByGroup(groupId);
+      if (!plan) return res.status(404).json({ message: "Trip not found" });
+      const itinerary = plan.itinerary ? JSON.parse(plan.itinerary) : null;
+      if (!itinerary?.days?.length) return res.status(400).json({ message: "Generate an itinerary first" });
+
+      const systemPrompt = `You add practical logistics to an existing travel itinerary. Do NOT change any "activity" text — only add detail.
+Return ONLY valid JSON: the SAME itinerary object back, but for every block add a "logistics" object and add a top-level "reservations" array.
+"logistics": { "travel": how to get there from the previous block + rough time (""=first block), "reserve": advance-booking note or "", "parking": parking reality if driving or "", "hours": opening hours / best time or "", "headsUp": one gotcha (cash-only, dress code, sells out, long lines, closed Mondays) or "" }.
+Keep each field under ~12 words. Use "" when not applicable — never invent facts.
+"reservations": everything that must be booked ahead, soonest lead-time first: [{ "what": string, "leadTime": string, "bookBy": "YYYY-MM-DD or null", "dayNumber": number }]. [] if none.`;
+
+      const userPrompt = `Destination: ${itinerary.destination ?? plan.destination}
+Trip dates: ${plan.startDate ?? "TBD"} to ${plan.endDate ?? "TBD"}
+Itinerary JSON to enrich (return it back with logistics + reservations added):
+${JSON.stringify({ days: itinerary.days })}`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+        response_format: { type: "json_object" },
+        max_tokens: 4000,
+      });
+
+      const enriched = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
+      // Merge defensively: keep original activities/cost/transport/notes, layer in logistics.
+      const BLOCKS = ["morning", "afternoon", "evening"] as const;
+      if (Array.isArray(enriched.days)) {
+        itinerary.days = itinerary.days.map((day: any, di: number) => {
+          const ed = enriched.days[di] ?? {};
+          for (const b of BLOCKS) {
+            if (day[b] && ed[b]?.logistics) day[b] = { ...day[b], logistics: ed[b].logistics };
+          }
+          return day;
+        });
+      }
+      itinerary.reservations = Array.isArray(enriched.reservations) ? enriched.reservations : [];
+      await storage.saveItinerary(groupId, itinerary);
+
+      const soonest = itinerary.reservations?.[0];
+      if (soonest?.what) {
+        await storage.createPipMessage(groupId, `🔒 Logistics added to your itinerary. Heads up — lock in ${soonest.what} early (${soonest.leadTime ?? "books up fast"}). Full list is in the Itinerary panel.`);
+      }
+      res.json(itinerary);
+    } catch (e) {
+      console.error("enrich-logistics error:", e);
+      res.status(500).json({ message: "Failed to add logistics" });
     }
   });
 

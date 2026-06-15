@@ -1919,8 +1919,10 @@ function CollapsibleAvailability({ groupId, participantCount }: { groupId: numbe
 const BLOCK_LABELS = ["Morning", "Afternoon", "Evening"];
 const BLOCK_KEYS = ["morning", "afternoon", "evening"] as const;
 type BlockKey = typeof BLOCK_KEYS[number];
-interface ItinBlock { activity: string; cost: string; transport: string; notes: string; }
+interface ItinLogistics { travel?: string; reserve?: string; parking?: string; hours?: string; headsUp?: string; }
+interface ItinBlock { activity: string; cost: string; transport: string; notes: string; logistics?: ItinLogistics; }
 interface ItinDay { dayNumber: number; date: string | null; morning: ItinBlock; afternoon: ItinBlock; evening: ItinBlock; }
+interface ItinReservation { what: string; leadTime?: string; bookBy?: string | null; dayNumber?: number; }
 const EVENT_EMOJI: Record<string, string> = {
   music: "🎵", nightlife: "🎧", festival: "🎪", market: "🧺",
   food: "🍽️", sports: "🏟️", art: "🎨", seasonal: "🍁", other: "📍",
@@ -1937,7 +1939,7 @@ function formatEventDate(date: string, endDate?: string | null): string {
   } catch { return date; }
 }
 
-interface ItinData { destination: string; days: ItinDay[]; totalBudgetPerPerson: string; generalTips: string; }
+interface ItinData { destination: string; days: ItinDay[]; totalBudgetPerPerson: string; generalTips: string; reservations?: ItinReservation[]; }
 interface ItinSugg { id: number; dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string; votes: number; applied: boolean; }
 
 function ItinerarySection({ trip, groupId, participantId, participantName, participantCount, canEdit = true, onTripUpdate }: {
@@ -1959,6 +1961,7 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
   const [autonomy, setAutonomyState] = React.useState<"full" | "vote" | "manual">((trip.itineraryAutonomy as any) ?? "vote");
   const [editingBlock, setEditingBlock] = React.useState<{ day: number; block: number } | null>(null);
   const [editText, setEditText] = React.useState("");
+  const [enriching, setEnriching] = React.useState(false);
   const [localItinerary, setLocalItinerary] = React.useState<ItinData | null>(parsedItinerary);
   const [suggestions, setSuggestions] = React.useState<ItinSugg[]>([]);
   const [expandedDay, setExpandedDay] = React.useState<number | null>(null);
@@ -2086,6 +2089,15 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
     const res = await fetch(`/api/groups/${groupId}/itinerary`, authed({ participantId, itinerary: blank })).catch(() => null);
     setGenerating(false);
     if (res && res.ok) { setLocalItinerary(blank); setShowIntake(false); setExpandedDay(0); onTripUpdate?.(); }
+  };
+
+  // Logistics auto-solver: enrich the existing itinerary in place.
+  const enrichLogistics = async () => {
+    if (enriching) return;
+    setEnriching(true);
+    const res = await fetch(`/api/groups/${groupId}/enrich-logistics`, authed({ participantId })).catch(() => null);
+    setEnriching(false);
+    if (res && res.ok) { const data = await res.json(); setLocalItinerary(data); onTripUpdate?.(); }
   };
 
   const overrides = new Map<string, string>();
@@ -2350,6 +2362,35 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
             )}
           </div>
 
+          {/* Reservations — "lock these in early" */}
+          {(localItinerary.reservations?.length ?? 0) > 0 && (
+            <div className="px-3 py-2.5 bg-amber-50/70 dark:bg-amber-950/20 border-b border-amber-200 dark:border-amber-800">
+              <div className="text-[9px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-300 mb-1.5 flex items-center gap-1">🔒 Lock these in early</div>
+              <div className="space-y-1">
+                {localItinerary.reservations!.map((r, i) => (
+                  <div key={i} className="flex items-start gap-1.5 text-[10px]">
+                    <span className="text-amber-500 mt-0.5">•</span>
+                    <span className="flex-1 leading-snug"><span className="font-bold">{r.what}</span>{r.leadTime ? ` — ${r.leadTime}` : ""}{r.dayNumber ? ` (Day ${r.dayNumber})` : ""}</span>
+                    {r.bookBy && <span className="shrink-0 font-bold text-amber-700 dark:text-amber-300">by {(() => { try { const d = parseISO(r.bookBy); return isValid(d) ? format(d, "MMM d") : r.bookBy; } catch { return r.bookBy; } })()}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Logistics auto-solver CTA — when the plan has no logistics yet */}
+          {canEdit && autonomy !== "manual" && !(localItinerary.reservations?.length) &&
+            !localItinerary.days?.some(d => [d.morning, d.afternoon, d.evening].some(b => b?.logistics && Object.values(b.logistics).some(Boolean))) && (
+            <button
+              onClick={enrichLogistics}
+              disabled={enriching}
+              data-testid="enrich-logistics"
+              className="w-full px-3 py-2.5 border-b border-border bg-secondary/30 hover:bg-secondary/60 transition-colors text-[11px] font-bold text-primary flex items-center justify-center gap-1.5 disabled:opacity-60"
+            >
+              {enriching ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Solving logistics — travel, reservations, parking…</> : <>🧭 Add logistics (travel time, reservations, parking, hours)</>}
+            </button>
+          )}
+
           {/* Days accordion */}
           <div className="divide-y divide-border">
             {(localItinerary.days ?? []).map((day, di) => {
@@ -2418,6 +2459,15 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
                                       {block?.transport && <span>🚗 {block.transport}</span>}
                                     </div>
                                     {block?.notes && <p className="text-[10px] text-muted-foreground/60 mt-0.5 italic">{block.notes}</p>}
+                                    {block?.logistics && Object.values(block.logistics).some(Boolean) && (
+                                      <div className="mt-1.5 pt-1.5 border-t border-border/40 space-y-0.5">
+                                        {block.logistics.travel && <p className="text-[10px] text-muted-foreground leading-snug">🚶 {block.logistics.travel}</p>}
+                                        {block.logistics.hours && <p className="text-[10px] text-muted-foreground leading-snug">🕒 {block.logistics.hours}</p>}
+                                        {block.logistics.reserve && <p className="text-[10px] text-indigo-600 dark:text-indigo-300 leading-snug font-semibold">📌 {block.logistics.reserve}</p>}
+                                        {block.logistics.parking && <p className="text-[10px] text-muted-foreground leading-snug">🅿️ {block.logistics.parking}</p>}
+                                        {block.logistics.headsUp && <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-snug font-semibold">⚠️ {block.logistics.headsUp}</p>}
+                                      </div>
+                                    )}
                                   </>
                                 )}
 

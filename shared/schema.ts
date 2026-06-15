@@ -28,6 +28,8 @@ export const participants = pgTable("participants", {
   groupId: integer("group_id").notNull(),
   name: text("name").notNull(),
   userId: integer("user_id"),
+  // Trip permission level: "owner" (full control) | "editor" (contribute + edit content) | "guest" (read-only)
+  role: text("role").notNull().default("editor"),
   joinedAt: timestamp("joined_at").defaultNow(),
 });
 
@@ -289,6 +291,8 @@ export type ChatMessage = (MessageWithParticipant & { isPip: false }) | (PipMess
 
 export type TripStatus = "Early ideas" | "Narrowing options" | "Almost decided" | "Trip locked";
 export type CommitmentLevel = "interested" | "likely" | "committed" | "unavailable";
+// Trip permission levels. Owner = full control, Editor = contribute + edit content, Guest = read-only.
+export type ParticipantRole = "owner" | "editor" | "guest";
 
 // Typed structure for AI extraction output
 export interface AiTripExtraction {

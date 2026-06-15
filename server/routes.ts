@@ -19,6 +19,29 @@ function inferLodgingType(lodgingPreference: string | null | undefined): "hotel"
   return null;
 }
 
+// Returns true (and sends a 403) if the participant is a read-only Guest.
+async function blockIfGuest(participantId: unknown, res: any): Promise<boolean> {
+  const id = Number(participantId);
+  if (!id) return false;
+  const p = await storage.getParticipant(id);
+  if (p && p.role === "guest") {
+    res.status(403).json({ message: "Guests have view-only access to this trip." });
+    return true;
+  }
+  return false;
+}
+
+// Resolves whether a given userId is an owner of the group (creator, or a participant
+// with the "owner" role). Used to gate admin-only routes.
+async function isGroupOwner(groupId: number, userId: number | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const group = await storage.getGroupById(groupId);
+  if (!group) return false;
+  if (group.createdByUserId === userId) return true;
+  const participantsList = await storage.getParticipantsByGroup(groupId);
+  return participantsList.some((p) => p.userId === userId && p.role === "owner");
+}
+
 // ============================================================
 //  AI ANALYSIS COOLDOWN
 //  Re-analyze every 3 new messages.
@@ -175,15 +198,20 @@ export async function registerRoutes(
     }
     try {
       const input = api.groups.join.input.parse(req.body);
-      const participant = await storage.createParticipant(group.id, input.name);
-      // Link to user account if token provided
+      // Determine if the joining user is the group's creator → they become owner.
+      let joiningUserId: number | undefined;
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith("Bearer ")) {
         try {
           const { verifyToken } = await import("./auth");
-          const { userId } = verifyToken(authHeader.slice(7));
-          await db.update(participants).set({ userId }).where(eq(participants.id, participant.id));
+          joiningUserId = verifyToken(authHeader.slice(7)).userId;
         } catch { /* no-op if token invalid */ }
+      }
+      const isCreator = joiningUserId != null && group.createdByUserId === joiningUserId;
+      const participant = await storage.createParticipant(group.id, input.name, isCreator ? "owner" : "editor");
+      // Link to user account if token provided
+      if (joiningUserId != null) {
+        await db.update(participants).set({ userId: joiningUserId }).where(eq(participants.id, participant.id));
       }
       res.status(201).json(participant);
     } catch (err) {
@@ -381,6 +409,7 @@ export async function registerRoutes(
       if (!participant || participant.groupId !== groupId) {
         return res.status(403).json({ message: "Invalid participant for this group" });
       }
+      if (participant.role === "guest") return res.status(403).json({ message: "Guests have view-only access to this trip." });
 
       const alt = await storage.getTripAlternativeById(alternativeId);
       if (!alt || alt.groupId !== groupId) {
@@ -428,6 +457,7 @@ export async function registerRoutes(
       if (!participant || participant.groupId !== groupId) {
         return res.status(403).json({ message: "Invalid participant for this group" });
       }
+      if (participant.role === "guest") return res.status(403).json({ message: "Guests have view-only access to this trip." });
 
       // Validate that alternativeId belongs to this group (prevents cross-group tampering)
       if (alternativeId !== null) {
@@ -668,6 +698,7 @@ export async function registerRoutes(
     const groupId = Number(req.params.groupId);
     const { participantId, flightBooked, lodgingStatus } = req.body;
     if (!participantId) return res.status(400).json({ message: "participantId required" });
+    if (await blockIfGuest(participantId, res)) return;
     const patch: { flightBooked?: boolean; lodgingStatus?: string } = {};
     if (flightBooked !== undefined) patch.flightBooked = flightBooked;
     if (lodgingStatus !== undefined) patch.lodgingStatus = lodgingStatus;
@@ -783,6 +814,58 @@ export async function registerRoutes(
     if (!isCreator && !isParticipant) return res.status(403).json({ message: "Not authorized" });
     await storage.deleteGroup(groupId);
     res.json({ ok: true });
+  });
+
+  app.delete("/api/groups/:groupId/participants/:participantId", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const participantId = Number(req.params.participantId);
+    const userId = (req as any).userId;
+    if (!(await isGroupOwner(groupId, userId))) return res.status(403).json({ message: "Only trip owners can remove people" });
+    await storage.removeParticipant(groupId, participantId);
+    res.json({ ok: true });
+  });
+
+  // Owner-only: change a member's permission level (owner | editor | guest)
+  app.patch("/api/groups/:groupId/participants/:participantId/role", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const participantId = Number(req.params.participantId);
+    const userId = (req as any).userId;
+    const { role } = req.body as { role?: string };
+    if (!role || !["owner", "editor", "guest"].includes(role)) {
+      return res.status(400).json({ message: "role must be owner, editor, or guest" });
+    }
+    if (!(await isGroupOwner(groupId, userId))) return res.status(403).json({ message: "Only trip owners can change roles" });
+    const updated = await storage.updateParticipantRole(groupId, participantId, role);
+    if (!updated) return res.status(404).json({ message: "Participant not found" });
+    res.json(updated);
+  });
+
+  // Owner-only: edit core trip metadata (Trip Setup wizard + inline edits).
+  // Whitelists the fields an owner may set directly so the rest of the plan stays AI-driven.
+  app.patch("/api/groups/:groupId/trip-plan", authMiddleware, async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const userId = (req as any).userId;
+    if (!(await isGroupOwner(groupId, userId))) return res.status(403).json({ message: "Only trip owners can edit the plan" });
+
+    const body = req.body as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    const stringFields = ["destination", "startDate", "endDate", "originCity", "budgetBand", "lodgingPreference", "flightSearchUrl", "kayakUrl", "airbnbUrl", "hotelsUrl", "lodgingType"];
+    for (const f of stringFields) {
+      if (body[f] !== undefined) patch[f] = body[f] === "" ? null : body[f];
+    }
+    const boolFields = ["flightsBooked", "lodgingBooked"];
+    for (const f of boolFields) {
+      if (body[f] !== undefined) patch[f] = !!body[f];
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ message: "Nothing to update" });
+
+    // Infer lodging type if a lodging URL is being set without an explicit type.
+    if ((patch.airbnbUrl || patch.hotelsUrl) && patch.lodgingType === undefined) {
+      patch.lodgingType = patch.airbnbUrl ? "rental" : "hotel";
+    }
+
+    const trip = await storage.upsertTripPlan(groupId, patch as any);
+    res.json(trip);
   });
 
   // === MY TRIPS ===
@@ -902,6 +985,7 @@ export async function registerRoutes(
     const groupId = Number(req.params.groupId);
     const { participantId, participantName, origin, airline, price, departureAt, url } = req.body;
     if (!participantId || !participantName || !origin) return res.status(400).json({ message: "participantId, participantName, origin required" });
+    if (await blockIfGuest(participantId, res)) return;
     try {
       const opt = await storage.addFlightOption(groupId, {
         participantId: Number(participantId), participantName, origin,
@@ -1039,7 +1123,7 @@ Off-limits: ${prefs.offLimits ?? "none"}`;
 
   app.post("/api/groups/:groupId/pip-step-nudge", async (req, res) => {
     const groupId = Number(req.params.groupId);
-    const { step } = req.body; // 1-5
+    const { step } = req.body; // 1-4 (Destination, Dates, Flights, Lodging)
     if (!step) return res.status(400).json({ message: "step required" });
     try {
       const plan = await storage.getTripPlanByGroup(groupId);
@@ -1048,18 +1132,13 @@ Off-limits: ${prefs.offLimits ?? "none"}`;
         const hoursSince = (Date.now() - new Date(plan.lastNudgeAt).getTime()) / 3600000;
         if (hoursSince < 24) return res.json({ ok: true, skipped: true });
       }
-      const participants = await storage.getParticipantsByGroup(groupId);
-      const commitments = await storage.getCommitments(groupId);
-      const notCommittedNames = participants
-        .filter(p => !commitments.find(c => c.participantId === p.id && c.flightBooked))
-        .map(p => p.name);
 
+      // "Crew in" was removed as a progress step — joining the trip = committed.
       const msgs: Record<number, string> = {
         1: `Hey crew! First things first — where are we going? Drop a destination in the chat and let's vote on it 🌍`,
         2: `Destination locked! Now let's nail down dates. Check the availability calendar and propose a window in the chat 📅`,
-        3: `Dates are set! ${notCommittedNames.length > 0 ? `${notCommittedNames.join(", ")} — you're up.` : "Everyone needs to"} Tap "I'm in" to confirm you're coming 🙋`,
-        4: `Crew confirmed! Time to book flights ✈️ Add your flight options in the Trip Plan panel so everyone can compare prices.`,
-        5: `Flights sorted! One last step — book lodging 🏠 Check off yours once it's done so everyone can see the status.`,
+        3: `Dates are set! Time to book flights ✈️ Add your flight options in the Trip Plan panel so everyone can compare prices.`,
+        4: `Flights sorted! One last step — book lodging 🏠 Check off yours once it's done so everyone can see the status.`,
       };
 
       const message = msgs[step as number];

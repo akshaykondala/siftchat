@@ -21,7 +21,7 @@ import {
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
   Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map as MapIcon, Compass, Mail, X,
 } from "lucide-react";
-import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal } from "@shared/schema";
+import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal, ParticipantRole, Participant } from "@shared/schema";
 import { PipAvatar } from "@/components/pip-avatar";
 import { PipCharacter } from "@/components/pip-character";
 
@@ -402,12 +402,14 @@ function MyStatusCard({
   alternatives,
   trip,
   attendanceMutation,
+  canEdit = true,
 }: {
   groupId: number;
   participantId: number;
   alternatives: TripAlternative[];
   trip: TripPlan | null | undefined;
   attendanceMutation: ReturnType<typeof useUpdateAttendance>;
+  canEdit?: boolean;
 }) {
   const { data: mySignals = [] } = useMyAttendance(groupId, participantId);
 
@@ -447,14 +449,14 @@ function MyStatusCard({
           {stanceButtons.map(({ level, label: btnLabel }) => (
             <button
               key={level}
-              onClick={() => attendanceMutation.mutate({ participantId, alternativeId, commitmentLevel: level })}
-              disabled={attendanceMutation.isPending}
+              onClick={() => canEdit && attendanceMutation.mutate({ participantId, alternativeId, commitmentLevel: level })}
+              disabled={attendanceMutation.isPending || !canEdit}
               className={cn(
                 "px-2 py-0.5 rounded-full text-[11px] font-medium transition-all border",
                 currentLevel === level
                   ? cn(COMMITMENT_CONFIG[level].color, "border-current opacity-100 ring-1 ring-current/30")
                   : "bg-transparent text-muted-foreground border-border hover:border-primary/30 hover:text-foreground",
-                attendanceMutation.isPending && "opacity-50 cursor-not-allowed"
+                (attendanceMutation.isPending || !canEdit) && "opacity-50 cursor-not-allowed"
               )}
               data-testid={`my-status-toggle-${level}-${testSuffix}`}
             >
@@ -495,6 +497,7 @@ function AlternativeCard({
   voteMutation,
   attendanceMutation,
   lockMutation,
+  canEdit = true,
 }: {
   alt: TripAlternative;
   groupId: number;
@@ -504,6 +507,7 @@ function AlternativeCard({
   voteMutation: ReturnType<typeof useVoteAlternative>;
   attendanceMutation: ReturnType<typeof useUpdateAttendance>;
   lockMutation: ReturnType<typeof useLockTrip>;
+  canEdit?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const committedNames = alt.committedAttendeeNames ?? [];
@@ -546,8 +550,8 @@ function AlternativeCard({
             "h-8 gap-1.5 text-xs shrink-0",
             voteMutation.isPending && "opacity-60"
           )}
-          onClick={() => voteMutation.mutate({ alternativeId: alt.id, participantId })}
-          disabled={voteMutation.isPending}
+          onClick={() => canEdit && voteMutation.mutate({ alternativeId: alt.id, participantId })}
+          disabled={voteMutation.isPending || !canEdit}
           data-testid={`button-vote-${alt.id}`}
         >
           {voteMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <ThumbsUp className="w-3 h-3" />}
@@ -1375,6 +1379,9 @@ function CommitmentCards({
   lodgingType,
   flightsRelevant,
   lodgingRelevant,
+  isAdmin = false,
+  canCheck = true,
+  onRemoveParticipant,
 }: {
   groupId: number;
   participantId: number;
@@ -1382,6 +1389,9 @@ function CommitmentCards({
   lodgingType: string | null;
   flightsRelevant: boolean;
   lodgingRelevant: boolean;
+  isAdmin?: boolean;
+  canCheck?: boolean; // false for Guests — they can't tick their own boxes
+  onRemoveParticipant?: (participantId: number) => void;
 }) {
   const [commitments, setCommitments] = React.useState<Commitment[]>([]);
   const [updating, setUpdating] = React.useState(false);
@@ -1421,6 +1431,7 @@ function CommitmentCards({
         {participants.map(p => {
           const c = commitments.find(x => x.participantId === p.id);
           const isMe = p.id === participantId;
+          const editable = isMe && canCheck;
           const flightDone = c?.flightBooked ?? false;
           const lodgingDone = c?.lodgingStatus === "booked" || c?.lodgingStatus === "covered";
 
@@ -1439,7 +1450,7 @@ function CommitmentCards({
 
               {/* Flight pill */}
               {flightsRelevant && (
-                isMe ? (
+                editable ? (
                   <button
                     disabled={updating}
                     onClick={() => update({ flightBooked: !flightDone })}
@@ -1467,7 +1478,7 @@ function CommitmentCards({
 
               {/* Lodging pill */}
               {lodgingRelevant && (
-                isMe ? (
+                editable ? (
                   isRental ? (
                     <div className="flex gap-1 shrink-0">
                       {!anyoneBookedRental || c?.lodgingStatus === "booked" ? (
@@ -1526,6 +1537,7 @@ function CommitmentCards({
                   </span>
                 )
               )}
+              {/* Member removal lives in the Members panel (Crew section) now. */}
             </div>
           );
         })}
@@ -1557,14 +1569,17 @@ function TripProgressBar({
 
   const flightBookedCount = commitments.filter((c) => c.flightBooked).length;
   const lodgingBookedCount = commitments.filter((c) => c.lodgingStatus === "booked" || c.lodgingStatus === "covered").length;
-  const crewIn = participantCount > 0 && (trip.committedAttendeeNames?.length ?? 0) >= participantCount;
 
+  // "Crew in" was dropped from the progress: joining the trip = being committed.
+  // Flights/lodging count as done when everyone has booked OR an owner marked the
+  // group-level flag (e.g. via Trip Setup — "we already booked everything").
+  const flightsDone = !!trip.flightsBooked || (participantCount > 0 && flightBookedCount >= participantCount);
+  const lodgingDone = !!trip.lodgingBooked || (participantCount > 0 && lodgingBookedCount >= participantCount);
   const steps = [
     { label: "Destination", done: !!trip.destination, icon: "🌍", cta: "Chat @pip with a destination idea" },
     { label: "Dates", done: !!(trip.startDate && trip.endDate), icon: "📅", cta: "Check the availability calendar and propose a window" },
-    { label: "Crew in", done: crewIn, icon: "🙋", cta: "Everyone needs to tap \"I'm in\" below" },
-    { label: "Flights", done: participantCount > 0 && flightBookedCount >= participantCount, icon: "✈️", cta: "Add your flight options below — compare prices as a group" },
-    { label: "Lodging", done: participantCount > 0 && lodgingBookedCount >= participantCount, icon: "🏠", cta: "Check off your lodging once it's booked" },
+    { label: "Flights", done: flightsDone, icon: "✈️", cta: "Add your flight options below — compare prices as a group" },
+    { label: "Lodging", done: lodgingDone, icon: "🏠", cta: "Check off your lodging once it's booked" },
   ];
 
   const currentStepIdx = steps.findIndex((s) => !s.done);
@@ -1664,7 +1679,7 @@ function TripProgressBar({
 // ─── Flight Options Panel ──────────────────────────────────────────────────────
 interface FlightOpt { id: number; participantId: number; participantName: string; origin: string; airline: string | null; price: number | null; departureAt: string | null; url: string | null; selected: boolean; }
 
-function FlightOptionsPanel({ groupId, participantId, participantName, participants }: { groupId: number; participantId: number; participantName: string; participants: { id: number; name: string }[] }) {
+function FlightOptionsPanel({ groupId, participantId, participantName, participants, canEdit = true }: { groupId: number; participantId: number; participantName: string; participants: { id: number; name: string }[]; canEdit?: boolean }) {
   const [options, setOptions] = React.useState<FlightOpt[]>([]);
   const [showForm, setShowForm] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
@@ -1730,12 +1745,14 @@ function FlightOptionsPanel({ groupId, participantId, participantName, participa
         <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1">
           <Plane className="w-3 h-3" /> Flight Options
         </div>
-        <button
-          onClick={() => setShowForm(v => !v)}
-          className="text-[10px] font-bold text-primary hover:underline"
-        >
-          {showForm ? "Cancel" : "+ Add mine"}
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => setShowForm(v => !v)}
+            className="text-[10px] font-bold text-primary hover:underline"
+          >
+            {showForm ? "Cancel" : "+ Add mine"}
+          </button>
+        )}
       </div>
 
       {/* Add form */}
@@ -1907,11 +1924,12 @@ interface ItinDay { dayNumber: number; date: string | null; morning: ItinBlock; 
 interface ItinData { destination: string; days: ItinDay[]; totalBudgetPerPerson: string; generalTips: string; }
 interface ItinSugg { id: number; dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string; votes: number; applied: boolean; }
 
-function ItinerarySection({ trip, groupId, participantName, participantCount }: {
+function ItinerarySection({ trip, groupId, participantName, participantCount, canEdit = true }: {
   trip: TripPlan;
   groupId: number;
   participantName: string;
   participantCount: number;
+  canEdit?: boolean;
 }) {
   const parsedItinerary: ItinData | null = (() => { try { return trip.itinerary ? JSON.parse(trip.itinerary) : null; } catch { return null; } })();
   const savedPrefs = (() => { try { return trip.itineraryPrefs ? JSON.parse(trip.itineraryPrefs) : {}; } catch { return {}; } })();
@@ -2000,14 +2018,21 @@ function ItinerarySection({ trip, groupId, participantName, participantCount }: 
         <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
           <MapIcon className="w-3 h-3" /> Itinerary
         </div>
-        {localItinerary && !showIntake && (
+        {canEdit && localItinerary && !showIntake && (
           <button onClick={() => setShowIntake(true)} className="text-[10px] font-bold text-primary hover:underline">Regenerate</button>
         )}
       </div>
 
-      {/* Intake form */}
+      {/* Guests with no itinerary yet just see a waiting note */}
+      {!canEdit && !localItinerary && (
+        <div className="rounded-2xl border bg-card p-3 text-[11px] text-muted-foreground">
+          No itinerary yet — an editor or owner will build it.
+        </div>
+      )}
+
+      {/* Intake form (contributors only) */}
       <AnimatePresence>
-        {showIntake && (
+        {canEdit && showIntake && (
           <motion.form key="intake" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} onSubmit={generate}
             className="mb-3 rounded-2xl border bg-card p-3 space-y-3 overflow-hidden">
             <p className="text-[11px] text-muted-foreground">Tell Pip about the vibe so the itinerary actually fits your crew.</p>
@@ -2141,10 +2166,12 @@ function ItinerarySection({ trip, groupId, participantName, participantCount }: 
                               <div key={key} className="rounded-xl bg-secondary/30 p-2.5">
                                 <div className="flex items-center justify-between mb-1">
                                   <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">{BLOCK_LABELS[bi]}</span>
-                                  <button onClick={() => { setSuggestingBlock(isSuggesting ? null : { day: di, block: bi }); setSuggestionText(""); }}
-                                    className="text-[9px] font-bold text-primary/70 hover:text-primary transition-colors">
-                                    {isSuggesting ? "Cancel" : "Suggest change"}
-                                  </button>
+                                  {canEdit && (
+                                    <button onClick={() => { setSuggestingBlock(isSuggesting ? null : { day: di, block: bi }); setSuggestionText(""); }}
+                                      className="text-[9px] font-bold text-primary/70 hover:text-primary transition-colors">
+                                      {isSuggesting ? "Cancel" : "Suggest change"}
+                                    </button>
+                                  )}
                                 </div>
 
                                 {appliedText ? (
@@ -2187,12 +2214,14 @@ function ItinerarySection({ trip, groupId, participantName, participantCount }: 
                                           <p className="text-[10px] font-semibold text-foreground leading-snug">{s.suggestion}</p>
                                           <p className="text-[9px] text-muted-foreground mt-0.5">by {s.proposedBy} · {s.votes} vote{s.votes !== 1 ? "s" : ""}</p>
                                         </div>
-                                        <div className="flex gap-0.5 shrink-0 mt-0.5">
-                                          <button onClick={() => vote(s.id, 1, s.proposedBy)}
-                                            className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold hover:bg-emerald-200 transition-colors">↑</button>
-                                          <button onClick={() => vote(s.id, -1, s.proposedBy)}
-                                            className="w-6 h-6 rounded-lg bg-secondary text-muted-foreground text-[11px] font-bold hover:bg-secondary/80 transition-colors">↓</button>
-                                        </div>
+                                        {canEdit && (
+                                          <div className="flex gap-0.5 shrink-0 mt-0.5">
+                                            <button onClick={() => vote(s.id, 1, s.proposedBy)}
+                                              className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold hover:bg-emerald-200 transition-colors">↑</button>
+                                            <button onClick={() => vote(s.id, -1, s.proposedBy)}
+                                              className="w-6 h-6 rounded-lg bg-secondary text-muted-foreground text-[11px] font-bold hover:bg-secondary/80 transition-colors">↓</button>
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
@@ -2228,6 +2257,285 @@ function ItinerarySection({ trip, groupId, participantName, participantCount }: 
   );
 }
 
+// ─── Trip Setup Wizard (owner) ─────────────────────────────────────────────────
+// One place for an owner to fill destination/dates and skip ahead. The "already
+// booked everything, just want the itinerary" fast-path lives here.
+function TripSetupWizard({ groupId, trip, open, onOpenChange, onSaved, onJumpToItinerary }: {
+  groupId: number;
+  trip: TripPlan | null | undefined;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onSaved: () => void;
+  onJumpToItinerary: () => void;
+}) {
+  const { toast } = useToast();
+  const [dest, setDest] = React.useState(trip?.destination ?? "");
+  const [start, setStart] = React.useState(trip?.startDate ?? "");
+  const [end, setEnd] = React.useState(trip?.endDate ?? "");
+  const [flightsBooked, setFlightsBooked] = React.useState(!!trip?.flightsBooked);
+  const [lodgingBooked, setLodgingBooked] = React.useState(!!trip?.lodgingBooked);
+  const [saving, setSaving] = React.useState(false);
+
+  // Keep fields in sync if the plan changes underneath (e.g. Pip updates it).
+  React.useEffect(() => {
+    setDest(trip?.destination ?? "");
+    setStart(trip?.startDate ?? "");
+    setEnd(trip?.endDate ?? "");
+    setFlightsBooked(!!trip?.flightsBooked);
+    setLodgingBooked(!!trip?.lodgingBooked);
+  }, [trip?.destination, trip?.startDate, trip?.endDate, trip?.flightsBooked, trip?.lodgingBooked]);
+
+  const save = async (extra: Record<string, unknown> = {}): Promise<boolean> => {
+    setSaving(true);
+    try {
+      const token = localStorage.getItem("siftchat_token");
+      const res = await fetch(`/api/groups/${groupId}/trip-plan`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ destination: dest.trim(), startDate: start, endDate: end, flightsBooked, lodgingBooked, ...extra }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Failed" }));
+        toast({ title: err.message ?? "Couldn't save", variant: "destructive" });
+        return false;
+      }
+      onSaved();
+      return true;
+    } finally { setSaving(false); }
+  };
+
+  const handleSave = async () => { if (await save()) toast({ title: "Trip details saved ✨" }); };
+  const handleJump = async () => {
+    if (!dest.trim() || !start || !end) { toast({ title: "Add a destination and dates first", variant: "destructive" }); return; }
+    if (await save({ flightsBooked: true, lodgingBooked: true })) {
+      setFlightsBooked(true); setLodgingBooked(true);
+      toast({ title: "Jumped to itinerary 🗺️", description: "Flights & lodging marked done." });
+      onJumpToItinerary();
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/20 overflow-hidden">
+      <button type="button" onClick={() => onOpenChange(!open)} aria-expanded={open} data-testid="trip-setup-toggle" className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-amber-100/40 dark:hover:bg-amber-900/20 transition-colors">
+        <div className="flex items-center gap-2">
+          <span className="text-sm">⚡</span>
+          <span className="text-[11px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-300">Trip Setup</span>
+          <span className="text-[8px] font-bold uppercase tracking-wide text-amber-600/70 dark:text-amber-400/70">Owner</span>
+        </div>
+        <ChevronDown className={cn("w-4 h-4 text-amber-600 transition-transform", open && "rotate-180")} />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+            <div className="px-3 pb-3 pt-1 space-y-3">
+              <p className="text-[10px] text-amber-700/80 dark:text-amber-300/80 leading-snug">
+                Fill in what you already know and skip ahead. Already booked everything? Hit <span className="font-bold">Jump to Itinerary</span>.
+              </p>
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground block mb-1">🌍 Destination</label>
+                <input value={dest} onChange={e => setDest(e.target.value)} placeholder="Smoky Mountains" className="w-full h-8 rounded-lg bg-card border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-semibold text-muted-foreground block mb-1">📅 Start</label>
+                  <input type="date" value={start} onChange={e => setStart(e.target.value)} className="w-full h-8 rounded-lg bg-card border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold text-muted-foreground block mb-1">📅 End</label>
+                  <input type="date" value={end} onChange={e => setEnd(e.target.value)} className="w-full h-8 rounded-lg bg-card border border-border px-2 text-xs focus:outline-none focus:border-primary/40" />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" checked={flightsBooked} onChange={e => setFlightsBooked(e.target.checked)} className="rounded accent-amber-500" />
+                  <span>✈️ Flights already booked</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" checked={lodgingBooked} onChange={e => setLodgingBooked(e.target.checked)} className="rounded accent-amber-500" />
+                  <span>🏠 Lodging already booked</span>
+                </label>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={handleSave} disabled={saving} className="flex-1 h-8 rounded-xl border border-border bg-card text-xs font-bold disabled:opacity-60">
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button onClick={handleJump} disabled={saving} className="flex-1 h-8 rounded-xl bg-amber-500 text-white text-xs font-bold disabled:opacity-60 hover:bg-amber-600">
+                  Jump to Itinerary →
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Members & Roles ───────────────────────────────────────────────────────────
+const ROLE_META: Record<ParticipantRole, { label: string; cls: string }> = {
+  owner: { label: "Owner", cls: "bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-700" },
+  editor: { label: "Editor", cls: "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/30 dark:text-sky-300 dark:border-sky-700" },
+  guest: { label: "Guest", cls: "bg-zinc-100 text-zinc-600 border-zinc-300 dark:bg-zinc-800/50 dark:text-zinc-400 dark:border-zinc-700" },
+};
+
+function MembersPanel({ groupId, participants, myParticipantId, isOwner, onChanged, onRemove }: {
+  groupId: number;
+  participants: { id: number; name: string; role?: string | null }[];
+  myParticipantId: number;
+  isOwner: boolean;
+  onChanged: () => void;
+  onRemove?: (participantId: number) => void;
+}) {
+  const { toast } = useToast();
+  const [busyId, setBusyId] = React.useState<number | null>(null);
+
+  const setRole = async (pid: number, role: ParticipantRole) => {
+    setBusyId(pid);
+    try {
+      const token = localStorage.getItem("siftchat_token");
+      const res = await fetch(`/api/groups/${groupId}/participants/${pid}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({ message: "Failed" })); toast({ title: e.message ?? "Failed", variant: "destructive" }); return; }
+      onChanged();
+    } finally { setBusyId(null); }
+  };
+
+  return (
+    <div>
+      <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Members</div>
+      <div className="rounded-2xl border border-border bg-card overflow-hidden divide-y divide-border">
+        {participants.map(p => {
+          const role = (p.role as ParticipantRole) ?? "editor";
+          const meta = ROLE_META[role] ?? ROLE_META.editor;
+          const isMe = p.id === myParticipantId;
+          return (
+            <div key={p.id} className="flex items-center gap-2.5 px-3 py-2.5">
+              <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-[11px] font-black text-primary shrink-0">{p.name.charAt(0).toUpperCase()}</div>
+              <p className="flex-1 min-w-0 text-xs font-semibold truncate">{isMe ? "You" : p.name}</p>
+              {isOwner && !isMe ? (
+                <select
+                  value={role}
+                  disabled={busyId === p.id}
+                  onChange={e => setRole(p.id, e.target.value as ParticipantRole)}
+                  data-testid={`role-select-${p.id}`}
+                  className="text-[10px] font-bold rounded-full border border-border bg-secondary px-2 py-1 focus:outline-none focus:border-primary/40 disabled:opacity-50"
+                >
+                  <option value="owner">Owner</option>
+                  <option value="editor">Editor</option>
+                  <option value="guest">Guest</option>
+                </select>
+              ) : (
+                <span className={cn("text-[10px] font-bold px-2 py-1 rounded-full border shrink-0", meta.cls)}>{meta.label}</span>
+              )}
+              {isOwner && !isMe && onRemove && (
+                <button onClick={() => onRemove(p.id)} title={`Remove ${p.name}`} className="w-5 h-5 rounded-full flex items-center justify-center text-muted-foreground/40 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors shrink-0">
+                  <svg width="10" height="10" viewBox="0 0 10 10"><path d="M8.5 1.5L1.5 8.5M1.5 1.5L8.5 8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {isOwner && (
+        <p className="text-[9px] text-muted-foreground mt-1.5 px-1 leading-snug">
+          <span className="font-bold">Editors</span> add flights, vote & plan. <span className="font-bold">Guests</span> view only.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Collapsible Sidebar Section ───────────────────────────────────────────────
+function SidebarSection({
+  id,
+  title,
+  icon,
+  hint,
+  open,
+  onToggle,
+  active,
+  children,
+}: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  hint?: string;
+  open: boolean;
+  onToggle: (id: string) => void;
+  active?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn(
+      "rounded-2xl border overflow-hidden transition-colors",
+      active ? "border-indigo-300 dark:border-indigo-700 bg-indigo-50/40 dark:bg-indigo-950/20" : "bg-card/60"
+    )}>
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        aria-expanded={open}
+        data-testid={`sidebar-section-${id}`}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2.5 hover:bg-muted/40 transition-colors"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm leading-none shrink-0">{icon}</span>
+          <span className="text-[11px] font-black uppercase tracking-widest text-foreground/80 truncate">{title}</span>
+          {active && (
+            <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-indigo-100 dark:bg-indigo-900/40 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
+              <span className="w-1 h-1 rounded-full bg-indigo-500 animate-pulse" /> Now
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {!open && hint && (
+            <span className="text-[9px] text-muted-foreground truncate max-w-[120px] hidden sm:inline">{hint}</span>
+          )}
+          <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform", open && "rotate-180")} />
+        </div>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="px-3 pb-3 pt-1 space-y-4">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// Map the trip's current progress phase to the sidebar section that should auto-open.
+// Mirrors the step logic in TripProgressBar so there's a single source of truth.
+type SidebarSectionKey = "trip" | "crew" | "book" | "itinerary";
+function phaseSectionFor(
+  trip: TripPlan | null | undefined,
+  commitments: { participantId: number; flightBooked: boolean; lodgingStatus: string }[],
+  participantCount: number,
+): SidebarSectionKey {
+  if (!trip) return "trip";
+  const flightBookedCount = commitments.filter((c) => c.flightBooked).length;
+  const lodgingBookedCount = commitments.filter((c) => c.lodgingStatus === "booked" || c.lodgingStatus === "covered").length;
+  const steps: boolean[] = [
+    !!trip.destination,                                                                       // 0 Destination -> trip
+    !!(trip.startDate && trip.endDate),                                                       // 1 Dates       -> trip
+    !!trip.flightsBooked || (participantCount > 0 && flightBookedCount >= participantCount),   // 2 Flights     -> book
+    !!trip.lodgingBooked || (participantCount > 0 && lodgingBookedCount >= participantCount),  // 3 Lodging     -> book
+  ];
+  const currentStepIdx = steps.findIndex((done) => !done);
+  if (currentStepIdx === -1) return "itinerary"; // everything booked -> plan the days
+  const map: SidebarSectionKey[] = ["trip", "trip", "book", "book"];
+  return map[currentStepIdx];
+}
+
 // ─── Travel Workspace Panel ────────────────────────────────────────────────────
 function TravelWorkspace({
   groupId,
@@ -2239,6 +2547,11 @@ function TravelWorkspace({
   onShareSummary,
   allParticipants,
   onTripUpdate,
+  onGroupUpdate,
+  isAdmin = false,
+  isOwner = false,
+  myRole = "editor",
+  onRemoveParticipant,
 }: {
   groupId: number;
   participantId: number;
@@ -2247,8 +2560,13 @@ function TravelWorkspace({
   alternatives: TripAlternative[];
   tabMode?: boolean;
   onShareSummary: () => void;
-  allParticipants: { id: number; name: string }[];
+  allParticipants: { id: number; name: string; role?: string | null }[];
   onTripUpdate?: () => void;
+  onGroupUpdate?: () => void;
+  isAdmin?: boolean;
+  isOwner?: boolean;
+  myRole?: ParticipantRole;
+  onRemoveParticipant?: (participantId: number) => void;
 }) {
   const voteMutation = useVoteAlternative(groupId);
   const attendanceMutation = useUpdateAttendance(groupId);
@@ -2268,6 +2586,59 @@ function TravelWorkspace({
   const isLocked = trip?.status === "Trip locked";
 
   const activeAlternatives = alternatives.filter((a) => a.status === "active");
+
+  // Phase-aware collapsible sections: the section matching the trip's current
+  // phase auto-opens; the rest stay collapsed until the user expands them.
+  const phaseSection = phaseSectionFor(trip, progressCommitments, allParticipants.length);
+  const [openSections, setOpenSections] = React.useState<Set<SidebarSectionKey>>(() => new Set<SidebarSectionKey>([phaseSection]));
+  const didInitSections = React.useRef(false);
+  React.useEffect(() => {
+    // Once real trip data arrives, open the section for the current phase.
+    if (didInitSections.current) return;
+    if (!trip && activeAlternatives.length === 0) return;
+    didInitSections.current = true;
+    setOpenSections(new Set<SidebarSectionKey>([phaseSection]));
+  }, [trip, activeAlternatives.length, phaseSection]);
+  const toggleSection = React.useCallback((id: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id as SidebarSectionKey)) next.delete(id as SidebarSectionKey);
+      else next.add(id as SidebarSectionKey);
+      return next;
+    });
+  }, []);
+
+  // Guests are read-only; owners + editors can contribute.
+  const canEdit = myRole !== "guest";
+
+  // Owner-only: flip the group-level booked flags (Book section quick-toggles).
+  const markBooked = React.useCallback(async (field: "flightsBooked" | "lodgingBooked", value: boolean) => {
+    const token = localStorage.getItem("siftchat_token");
+    await fetch(`/api/groups/${groupId}/trip-plan`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ [field]: value }),
+    }).catch(() => {});
+    onTripUpdate?.();
+  }, [groupId, onTripUpdate]);
+
+  // Trip Setup wizard (owner) — auto-open when the trip is still missing the basics.
+  const tripNeedsSetup = !trip?.destination || !(trip?.startDate && trip?.endDate);
+  const [setupOpen, setSetupOpen] = React.useState(false);
+  const didInitSetup = React.useRef(false);
+  React.useEffect(() => {
+    if (didInitSetup.current || !trip) return;
+    didInitSetup.current = true;
+    if (isOwner && tripNeedsSetup) setSetupOpen(true);
+  }, [trip, isOwner, tripNeedsSetup]);
+
+  // What content each section has — used to hide empty sections.
+  const hasFlightUrls = !!(trip && (trip.flightSearchUrl || (trip as any).kayakUrl));
+  const hasLodgingUrls = !!(trip && ((trip as any).airbnbUrl || (trip as any).hotelsUrl));
+  const showTripSection = !!trip || activeAlternatives.length > 0;
+  const showCrewSection = (!!trip || activeAlternatives.length > 0) || allParticipants.length > 0;
+  const showBookSection = !!trip;
+  const showItinerarySection = !!(trip && trip.destination);
 
   return (
     <aside
@@ -2309,8 +2680,8 @@ function TravelWorkspace({
           onShareSummary={onShareSummary}
         />
       ) : (
-        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 pb-4">
-          {/* Trip Progress Bar */}
+        <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-3 pb-4">
+          {/* Trip Progress Bar — pinned at top; the navigation anchor / phase map */}
           {trip && (
             <div className="rounded-xl border bg-card/80 px-3 py-2">
               <TripProgressBar
@@ -2322,117 +2693,219 @@ function TravelWorkspace({
             </div>
           )}
 
-          {/* Group Availability — collapsed by default; Pip uses this, not users */}
-          {!isLocked && allParticipants.length > 0 && (
-            <CollapsibleAvailability groupId={groupId} participantCount={allParticipants.length} />
-          )}
-
-          {/* Trip Card */}
-          <div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Current Plan</div>
-            <TripCard
-              trip={trip ?? null}
-              winnerAlt={winnerAltId ? alternatives.find((a) => a.id === winnerAltId) ?? null : null}
+          {/* Trip Setup wizard — owner-only fast path to fill/skip phases */}
+          {isOwner && (
+            <TripSetupWizard
               groupId={groupId}
-              allParticipants={allParticipants}
-            />
-          </div>
-
-          {/* Flight Options — group price comparison */}
-          {trip && allParticipants.length > 0 && (
-            <FlightOptionsPanel
-              groupId={groupId}
-              participantId={participantId}
-              participantName={participantName}
-              participants={allParticipants}
-            />
-          )}
-
-          {/* Featured Flight */}
-          {trip && (trip.flightSearchUrl || (trip as any).kayakUrl) && (
-            <div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Flights</div>
-              <FeaturedFlightCard trip={trip} groupId={groupId} onTripUpdate={onTripUpdate} />
-            </div>
-          )}
-
-          {/* Featured Lodging */}
-          {trip && ((trip as any).airbnbUrl || (trip as any).hotelsUrl) && (
-            <div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Lodging</div>
-              <FeaturedLodgingCard trip={trip} groupId={groupId} onTripUpdate={onTripUpdate} />
-            </div>
-          )}
-
-          {/* Book-by Deadlines */}
-          {trip && (
-            <DeadlinesCard
               trip={trip}
-              groupId={groupId}
-              onTripUpdate={onTripUpdate}
+              open={setupOpen}
+              onOpenChange={setSetupOpen}
+              onSaved={() => onTripUpdate?.()}
+              onJumpToItinerary={() => {
+                setSetupOpen(false);
+                setOpenSections((prev) => {
+                  const next = new Set<SidebarSectionKey>(prev);
+                  next.add("itinerary");
+                  return next;
+                });
+              }}
             />
           )}
 
-          {/* Commitment Cards */}
-          {trip && allParticipants.length > 0 && (
-            <CommitmentCards
-              groupId={groupId}
-              participantId={participantId}
-              participants={allParticipants}
-              lodgingType={(trip as any).airbnbUrl ? "rental" : (trip as any).hotelsUrl ? "hotel" : ((trip as any).lodgingType ?? null)}
-              flightsRelevant={!!(trip.flightSearchUrl || (trip as any).kayakUrl || trip.flightsBooked)}
-              lodgingRelevant={!!((trip as any).airbnbUrl || (trip as any).hotelsUrl || trip.lodgingBooked || trip.lodgingPreference)}
-            />
+          {/* ── TRIP: where you're going & options on the table ── */}
+          {showTripSection && (
+            <SidebarSection
+              id="trip"
+              title="Trip"
+              icon="🌍"
+              hint={trip?.destination ?? "Pick a destination"}
+              open={openSections.has("trip")}
+              onToggle={toggleSection}
+              active={phaseSection === "trip"}
+            >
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Current Plan</div>
+                <TripCard
+                  trip={trip ?? null}
+                  winnerAlt={winnerAltId ? alternatives.find((a) => a.id === winnerAltId) ?? null : null}
+                  groupId={groupId}
+                  allParticipants={allParticipants}
+                />
+              </div>
+
+              {activeAlternatives.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Alternative Options
+                  </div>
+                  <div className="space-y-3">
+                    <AnimatePresence>
+                      {activeAlternatives.map((alt) => (
+                        <AlternativeCard
+                          key={alt.id}
+                          alt={alt}
+                          groupId={groupId}
+                          participantId={participantId}
+                          isWinner={alt.id === winnerAltId}
+                          tripStatus={trip?.status}
+                          voteMutation={voteMutation}
+                          attendanceMutation={attendanceMutation}
+                          lockMutation={lockMutation}
+                          canEdit={canEdit}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                </div>
+              )}
+            </SidebarSection>
           )}
 
-          {/* Itinerary Generator */}
-          {trip && trip.destination && (
-            <ItinerarySection
-              trip={trip}
-              groupId={groupId}
-              participantName={participantName}
-              participantCount={allParticipants.length}
-            />
+          {/* ── CREW: who's in, availability, accountability ── */}
+          {showCrewSection && (
+            <SidebarSection
+              id="crew"
+              title="Crew"
+              icon="🙋"
+              hint={`${allParticipants.length} ${allParticipants.length === 1 ? "person" : "people"}`}
+              open={openSections.has("crew")}
+              onToggle={toggleSection}
+              active={phaseSection === "crew"}
+            >
+              {allParticipants.length > 0 && (
+                <MembersPanel
+                  groupId={groupId}
+                  participants={allParticipants}
+                  myParticipantId={participantId}
+                  isOwner={isOwner}
+                  onChanged={() => onGroupUpdate?.()}
+                  onRemove={onRemoveParticipant}
+                />
+              )}
+
+              {(trip || activeAlternatives.length > 0) && (
+                <MyStatusCard
+                  groupId={groupId}
+                  participantId={participantId}
+                  alternatives={alternatives}
+                  trip={trip}
+                  attendanceMutation={attendanceMutation}
+                  canEdit={canEdit}
+                />
+              )}
+
+              {!isLocked && allParticipants.length > 0 && (
+                <CollapsibleAvailability groupId={groupId} participantCount={allParticipants.length} />
+              )}
+
+              {trip && allParticipants.length > 0 && (
+                <CommitmentCards
+                  groupId={groupId}
+                  participantId={participantId}
+                  participants={allParticipants}
+                  lodgingType={(trip as any).airbnbUrl ? "rental" : (trip as any).hotelsUrl ? "hotel" : ((trip as any).lodgingType ?? null)}
+                  flightsRelevant={!!(trip.flightSearchUrl || (trip as any).kayakUrl || trip.flightsBooked)}
+                  lodgingRelevant={!!((trip as any).airbnbUrl || (trip as any).hotelsUrl || trip.lodgingBooked || trip.lodgingPreference)}
+                  isAdmin={isAdmin}
+                  canCheck={canEdit}
+                  onRemoveParticipant={onRemoveParticipant}
+                />
+              )}
+            </SidebarSection>
           )}
 
+          {/* ── BOOK: flights, lodging, deadlines ── */}
+          {showBookSection && (
+            <SidebarSection
+              id="book"
+              title="Book"
+              icon="✈️"
+              hint={hasFlightUrls || hasLodgingUrls ? "Flights & lodging" : "Add options"}
+              open={openSections.has("book")}
+              onToggle={toggleSection}
+              active={phaseSection === "book"}
+            >
+              {/* Owner quick-toggles: mark the whole group's flights/lodging booked */}
+              {isOwner && trip && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => markBooked("flightsBooked", !trip.flightsBooked)}
+                    className={cn(
+                      "flex-1 h-8 rounded-xl border text-[11px] font-bold transition-colors",
+                      trip.flightsBooked
+                        ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                        : "bg-card border-border text-muted-foreground hover:border-primary/40"
+                    )}
+                  >
+                    {trip.flightsBooked ? "✈️ Flights booked ✓" : "Mark flights booked"}
+                  </button>
+                  <button
+                    onClick={() => markBooked("lodgingBooked", !trip.lodgingBooked)}
+                    className={cn(
+                      "flex-1 h-8 rounded-xl border text-[11px] font-bold transition-colors",
+                      trip.lodgingBooked
+                        ? "bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                        : "bg-card border-border text-muted-foreground hover:border-primary/40"
+                    )}
+                  >
+                    {trip.lodgingBooked ? "🏠 Lodging booked ✓" : "Mark lodging booked"}
+                  </button>
+                </div>
+              )}
 
-          {/* My Status */}
-          {(trip || activeAlternatives.length > 0) && (
-            <div>
-              <MyStatusCard
+              {trip && allParticipants.length > 0 && (
+                <FlightOptionsPanel
+                  groupId={groupId}
+                  participantId={participantId}
+                  participantName={participantName}
+                  participants={allParticipants}
+                  canEdit={canEdit}
+                />
+              )}
+
+              {hasFlightUrls && (
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Flights</div>
+                  <FeaturedFlightCard trip={trip!} groupId={groupId} onTripUpdate={onTripUpdate} />
+                </div>
+              )}
+
+              {hasLodgingUrls && (
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1">Book Lodging</div>
+                  <FeaturedLodgingCard trip={trip!} groupId={groupId} onTripUpdate={onTripUpdate} />
+                </div>
+              )}
+
+              {trip && (
+                <DeadlinesCard
+                  trip={trip}
+                  groupId={groupId}
+                  onTripUpdate={onTripUpdate}
+                />
+              )}
+            </SidebarSection>
+          )}
+
+          {/* ── ITINERARY: day-by-day plan ── */}
+          {showItinerarySection && (
+            <SidebarSection
+              id="itinerary"
+              title="Itinerary"
+              icon="🗺️"
+              hint="Plan your days"
+              open={openSections.has("itinerary")}
+              onToggle={toggleSection}
+              active={phaseSection === "itinerary"}
+            >
+              <ItinerarySection
+                trip={trip!}
                 groupId={groupId}
-                participantId={participantId}
-                alternatives={alternatives}
-                trip={trip}
-                attendanceMutation={attendanceMutation}
+                participantName={participantName}
+                participantCount={allParticipants.length}
+                canEdit={canEdit}
               />
-            </div>
-          )}
-
-          {/* Alternatives */}
-          {activeAlternatives.length > 0 && (
-            <div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 px-1 flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" /> Alternative Options
-              </div>
-              <div className="space-y-3">
-                <AnimatePresence>
-                  {activeAlternatives.map((alt) => (
-                    <AlternativeCard
-                      key={alt.id}
-                      alt={alt}
-                      groupId={groupId}
-                      participantId={participantId}
-                      isWinner={alt.id === winnerAltId}
-                      tripStatus={trip?.status}
-                      voteMutation={voteMutation}
-                      attendanceMutation={attendanceMutation}
-                      lockMutation={lockMutation}
-                    />
-                  ))}
-                </AnimatePresence>
-              </div>
-            </div>
+            </SidebarSection>
           )}
         </div>
       )}
@@ -2841,7 +3314,7 @@ export default function GroupPage() {
   const slug = match ? params.slug : "";
   const [, setLocation] = useLocation();
 
-  const { data: group, isLoading: groupLoading, error: groupError } = useGroup(slug);
+  const { data: group, isLoading: groupLoading, error: groupError, refetch: refetchGroup } = useGroup(slug);
   // useMessages returns all messages (user + pip) already interleaved and sorted by the server
   const { data: messages } = useMessages(group?.id ?? 0);
   const { data: trip, refetch: refetchTrip } = useTripPlan(group?.id ?? 0);
@@ -2862,6 +3335,47 @@ export default function GroupPage() {
   const prevPipCountRef = useRef(0);
   const prevMsgCountRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const loggedInUserId = getStoredUser()?.id;
+  const isAdmin = !!(group && loggedInUserId && group.createdByUserId === loggedInUserId);
+
+  // Resolve the current user's permission level. Group creator is always owner.
+  const myParticipant = (group?.participants ?? []).find((p) => p.id === participantId);
+  const myRole: ParticipantRole = isAdmin
+    ? "owner"
+    : (((myParticipant as any)?.role as ParticipantRole) ?? "editor");
+  const isOwner = isAdmin || myRole === "owner";
+
+  // Self-heal: a creator from before roles existed is backfilled as "editor" in the
+  // DB. Promote them to "owner" once so the roster reflects reality.
+  const didHealOwnerRef = useRef(false);
+  useEffect(() => {
+    if (didHealOwnerRef.current) return;
+    if (!group || !isAdmin || !myParticipant) return;
+    if (((myParticipant as any).role) === "owner") return;
+    didHealOwnerRef.current = true;
+    const token = localStorage.getItem("siftchat_token");
+    fetch(`/api/groups/${group.id}/participants/${myParticipant.id}/role`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ role: "owner" }),
+    }).then(r => { if (r.ok) refetchGroup(); }).catch(() => {});
+  }, [group, isAdmin, myParticipant, refetchGroup]);
+
+  const handleRemoveParticipant = React.useCallback(async (targetParticipantId: number) => {
+    if (!group) return;
+    const p = (group.participants ?? []).find(x => x.id === targetParticipantId);
+    const name = p?.name ?? "this person";
+    if (!window.confirm(`Remove ${name} from this trip?`)) return;
+    const res = await fetch(`/api/groups/${group.id}/participants/${targetParticipantId}`, { method: "DELETE" });
+    if (res.ok) {
+      toast({ title: `${name} removed` });
+      refetchGroup();
+    } else {
+      const err = await res.json().catch(() => ({ message: "Failed" }));
+      toast({ title: err.message ?? "Failed to remove", variant: "destructive" });
+    }
+  }, [group, refetchGroup, toast]);
 
   const isTyping = messageText.trim().length > 0;
   const { otherOnline, typingUsers, pipIsThinking } = usePresence(group?.id ?? 0, participantId, isTyping);
@@ -3261,6 +3775,11 @@ export default function GroupPage() {
           onShareSummary={shareTripSummary}
           allParticipants={group.participants ?? []}
           onTripUpdate={refetchTrip}
+          onGroupUpdate={refetchGroup}
+          isAdmin={isAdmin}
+          isOwner={isOwner}
+          myRole={myRole}
+          onRemoveParticipant={handleRemoveParticipant}
         />
       </div>
 

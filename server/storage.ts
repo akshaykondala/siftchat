@@ -19,9 +19,10 @@ export interface IStorage {
   getGroupById(id: number): Promise<Group | undefined>;
 
   // Participants
-  createParticipant(groupId: number, name: string): Promise<Participant>;
+  createParticipant(groupId: number, name: string, role?: string): Promise<Participant>;
   getParticipant(id: number): Promise<Participant | undefined>;
   getParticipantsByGroup(groupId: number): Promise<Participant[]>;
+  updateParticipantRole(groupId: number, participantId: number, role: string): Promise<Participant | undefined>;
 
   // Messages
   createMessage(groupId: number, participantId: number, content: string): Promise<Message>;
@@ -93,6 +94,7 @@ export interface IStorage {
   // Group management
   updateGroupName(groupId: number, name: string): Promise<Group>;
   deleteGroup(groupId: number): Promise<void>;
+  removeParticipant(groupId: number, participantId: number): Promise<void>;
 
   // Device tokens (push notifications)
   saveDeviceToken(userId: number, token: string, platform: string): Promise<DeviceToken>;
@@ -118,8 +120,16 @@ export class DatabaseStorage implements IStorage {
     return group;
   }
 
-  async createParticipant(groupId: number, name: string): Promise<Participant> {
-    const [participant] = await db.insert(participants).values({ groupId, name }).returning();
+  async createParticipant(groupId: number, name: string, role?: string): Promise<Participant> {
+    const [participant] = await db.insert(participants).values({ groupId, name, ...(role ? { role } : {}) }).returning();
+    return participant;
+  }
+
+  async updateParticipantRole(groupId: number, participantId: number, role: string): Promise<Participant | undefined> {
+    const [participant] = await db.update(participants)
+      .set({ role })
+      .where(and(eq(participants.id, participantId), eq(participants.groupId, groupId)))
+      .returning();
     return participant;
   }
 
@@ -466,6 +476,18 @@ export class DatabaseStorage implements IStorage {
     await db.delete(messages).where(eq(messages.groupId, groupId));
     await db.delete(participants).where(eq(participants.groupId, groupId));
     await db.delete(groups).where(eq(groups.id, groupId));
+  }
+
+  async removeParticipant(groupId: number, participantId: number): Promise<void> {
+    await db.delete(bookingCommitments).where(
+      and(eq(bookingCommitments.groupId, groupId), eq(bookingCommitments.participantId, participantId))
+    );
+    await db.delete(flightOptions).where(
+      and(eq(flightOptions.groupId, groupId), eq(flightOptions.participantId, participantId))
+    );
+    await db.delete(participants).where(
+      and(eq(participants.id, participantId), eq(participants.groupId, groupId))
+    );
   }
 
   // === DEVICE TOKEN METHODS ===

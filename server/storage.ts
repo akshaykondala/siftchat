@@ -86,6 +86,7 @@ export interface IStorage {
   // Itinerary
   saveItineraryPrefs(groupId: number, prefs: Record<string, string>): Promise<void>;
   saveItinerary(groupId: number, itinerary: unknown): Promise<void>;
+  saveTripEvents(groupId: number, events: unknown, scanKey: string): Promise<void>;
   getItinerarySuggestions(groupId: number): Promise<ItinerarySuggestion[]>;
   addItinerarySuggestion(groupId: number, data: { dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string }): Promise<ItinerarySuggestion>;
   voteItinerarySuggestion(id: number, delta: 1 | -1): Promise<ItinerarySuggestion>;
@@ -436,6 +437,10 @@ export class DatabaseStorage implements IStorage {
 
   async saveItinerary(groupId: number, itinerary: unknown): Promise<void> {
     await this.upsertTripPlan(groupId, { itinerary: JSON.stringify(itinerary) });
+  }
+
+  async saveTripEvents(groupId: number, events: unknown, scanKey: string): Promise<void> {
+    await this.upsertTripPlan(groupId, { events: JSON.stringify(events), eventsScanKey: scanKey, eventsScannedAt: new Date() });
   }
 
   async getItinerarySuggestions(groupId: number): Promise<ItinerarySuggestion[]> {

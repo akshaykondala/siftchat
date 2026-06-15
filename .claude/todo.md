@@ -1,25 +1,39 @@
 ## 🔴 P0 — Critical
 - [ ] Mobile UI overhaul — full audit of all screens (dashboard, auth, group header spacing) on device
 - [ ] Rebuild Xcode app after `npx cap sync ios` — open Xcode, Debug signing, add Push Notifications + Background Modes capabilities, select iPhone, hit Run ▶
+- [ ] **Itinerary: Event Radar (FIRST BUILD)** — date+location-aware local events engine; surface concerts, DJ sets, festivals, farmers markets, pop-ups, sports during the EXACT trip dates, woven into the day-by-day with source citations. Sourcing = HYBRID (event APIs for ticketed: Ticketmaster/SeatGeek/Bandsintown/RA/Songkick + web-search LLM for the long tail). Start with keyless web-search half, layer APIs as keys arrive.
+- [ ] **Itinerary: Autonomy dial** — hands-on ↔ hands-off: global trip mode (Plan it all / Suggest & we vote / I'll drive) WITH per-day/per-block override.
+- [ ] **Itinerary: Event Radar proactive scan** — re-scan at T-2wk / T-1wk; ping ONLY for big new announcements, sellout risk, or book-by deadlines (max ~1/scan).
 
 ## 🟠 P1 — High
-- [x] Group availability panel collapsed by default in trip sidebar — one-tap reveal button, Pip uses it not users
-- [x] Pip deduplication — prevent double messages in same processing run (phase guidance skips if pipMessage already posted this run)
-- [x] Pip date/location extraction — improved prompt: handles natural language, relative dates, month-only ranges, always detecting destination + dates across all message formats
-- [x] Itinerary suggestion apply — wipe old cost/transport/notes when suggestion wins majority vote
 - [ ] Pip as real action-taker — Pip searches flights, pulls Airbnb listings in budget, drops vote cards — does things, doesn't just chat
 - [ ] One-tap group decision cards — structured micro-decisions (pick a weekend, pick a city) with voting that actually resolves
 - [ ] "Trip alive vs dead" status — brutal public health bar; if 3/5 people haven't tapped "I'm in" after 48hrs, trip auto-archives with a RIP card
+- [ ] **Itinerary: Logistics auto-solver** — per-block travel time + geo-clustering, reservation lead-times, parking, hours, cash-only, dress code; wire "book-by" into deadlines/nudges
+- [ ] **Itinerary: Source citations + social proof** — each event/spot links to its source (TikTok/IG/article) with "trending" signal so it feels current, not generic
+- [ ] **Itinerary: Weather- & crew-aware scheduling** — forecast-driven indoor alternates + sunset times; respect each person's availability (late arrival / early exit auto-trims day 1 / last day)
 
 ## 🟡 P2 — Medium
 - [ ] Money on the line (deposits) — everyone puts $$ in when joining a trip, get it back when flight+lodging checked off (requires Stripe)
 - [ ] Post-trip scrapbook (keepsake) — planning thread + photos becomes a shareable card after the trip
 - [ ] Pip voice bubbles when tapping off iPhone screen
 - [ ] og-image.png (1200×630) needed in client/public/ for full visual link previews
+- [ ] **Itinerary: Budget rollup** — per-person estimated cost computed from itinerary blocks
+- [ ] **Itinerary: Booking handoffs** — one-tap deep links (Resy/OpenTable/Ticketmaster) that flow into commitment cards
+- [ ] **Itinerary: Calendar export + shareable itinerary card**
+- [ ] **Itinerary: During-trip "day-of" mode** — reshuffle on the fly ("running late, redo my afternoon")
+- [ ] **Itinerary: Locals-only vs tourist toggle**
 
 ## ⚪ P3 — Low / Nice-to-have
 
 ## ✅ Done
+- [x] Group availability panel collapsed by default in trip sidebar — one-tap reveal button, Pip uses it not users
+- [x] Pip deduplication — prevent double messages in same processing run (phase guidance skips if pipMessage already posted this run)
+- [x] Pip date/location extraction — improved prompt: handles natural language, relative dates, month-only ranges, always detecting destination + dates across all message formats
+- [x] Itinerary suggestion apply — wipe old cost/transport/notes when suggestion wins majority vote
+- [x] Trip sidebar reorg — 4 phase-aware collapsible sections (Trip/Crew/Book/Itinerary), removed "Crew in" progress step
+- [x] Owner/Editor/Guest permissions — role column, server guards, Members panel, role gating
+- [x] Trip Setup wizard — owner fast-path to fill/skip phases + Jump to Itinerary for already-booked groups
 - [x] 5-step progress rail — pulsing current step, CTA text, Pip nudge per step (24hr dedup)
 - [x] Flight options panel — per-participant multi-option tracking, cheapest badge, group price summary
 - [x] Itinerary generator — intake form, GPT-4o day-by-day, collapsible accordion, block suggestions, upvote/apply

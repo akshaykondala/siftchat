@@ -5,7 +5,8 @@ import { api } from "@shared/routes";
 import { sendPushNotifications, pipMessageToNotification } from "./notifications";
 import { z } from "zod";
 import { openai } from "./replit_integrations/audio/client";
-import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative } from "@shared/schema";
+import type { TripAlternative, CommitmentLevel, AiTripExtraction, AiAlternative, TripPlan, TripEvent } from "@shared/schema";
+import { createHash } from "crypto";
 import { signup, login, loginWithGoogle, signToken, getUserById, authMiddleware, checkRateLimit, resetRateLimit, validateSignupInput, GOOGLE_CLIENT_ID } from "./auth";
 import { db } from "./db";
 import { participants, groups, tripPlans, users } from "@shared/schema";
@@ -40,6 +41,90 @@ async function isGroupOwner(groupId: number, userId: number | undefined): Promis
   if (group.createdByUserId === userId) return true;
   const participantsList = await storage.getParticipantsByGroup(groupId);
   return participantsList.some((p) => p.userId === userId && p.role === "owner");
+}
+
+// Pull a JSON object out of an LLM text response (handles ```json fences / prose).
+function extractJsonObject(text: string): any {
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : text;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  try { return JSON.parse(candidate.slice(start, end + 1)); } catch { return null; }
+}
+
+const EVENT_CATEGORIES = ["music", "nightlife", "festival", "market", "food", "sports", "art", "seasonal", "other"];
+
+// ─── Event Radar ───────────────────────────────────────────────────────────────
+// Web-search-grounded scan for time-specific local events during the trip dates.
+// This is the keyless (OpenAI web search) half of the hybrid plan; ticketed-event
+// APIs slot in behind the same TripEvent shape later.
+async function runEventRadarScan(plan: TripPlan): Promise<TripEvent[]> {
+  const destination = plan.destination!;
+  const start = plan.startDate || null;
+  const end = plan.endDate || null;
+  const dateLine = start && end ? `${start} through ${end}` : start ? `around ${start}` : "the upcoming trip dates";
+
+  const prompt = `Search the web for real, time-specific local events happening in ${destination} during ${dateLine}.
+Focus on the things travelers usually miss and only find out about too late: live music & DJ sets, club/nightlife events, festivals, farmers & night markets, food pop-ups & special dinners, sports games, art/gallery openings, and seasonal happenings.
+Rules:
+- Only include events that actually fall within the date window.
+- Prefer notable, well-attended, or buzzy/trending events.
+- Always include a real source link (event page, venue, ticket site, or article).
+- Do NOT invent events. If you can't verify real ones, return an empty list.
+
+Return ONLY a JSON object of this shape:
+{"events":[{"title":string,"category":"music|nightlife|festival|market|food|sports|art|seasonal|other","date":"YYYY-MM-DD","endDate":"YYYY-MM-DD or null","timeText":string|null,"venue":string|null,"neighborhood":string|null,"description":"one sentence","whyNotable":string|null,"priceText":string|null,"bookByText":"lead-time or sellout note, or null","url":string,"source":string}]}`;
+
+  const resp: any = await openai.responses.create({
+    model: "gpt-4o",
+    tools: [{ type: "web_search" }],
+    input: prompt,
+    max_output_tokens: 3500,
+  });
+
+  const text: string = resp.output_text ?? "";
+  const parsed = extractJsonObject(text);
+  const raw: any[] = Array.isArray(parsed?.events) ? parsed.events : [];
+
+  const normalized: TripEvent[] = raw
+    .filter((e) => e && typeof e.title === "string" && typeof e.date === "string")
+    .map((e) => {
+      const category = EVENT_CATEGORIES.includes((e.category || "").toLowerCase()) ? (e.category as string).toLowerCase() : "other";
+      const date = String(e.date).slice(0, 10);
+      const endDate = e.endDate ? String(e.endDate).slice(0, 10) : null;
+      return {
+        id: createHash("sha1").update(`${e.title}|${date}`).digest("hex").slice(0, 12),
+        title: String(e.title).slice(0, 160),
+        category,
+        date,
+        endDate,
+        timeText: e.timeText ? String(e.timeText).slice(0, 60) : null,
+        venue: e.venue ? String(e.venue).slice(0, 120) : null,
+        neighborhood: e.neighborhood ? String(e.neighborhood).slice(0, 80) : null,
+        description: String(e.description ?? "").slice(0, 280),
+        whyNotable: e.whyNotable ? String(e.whyNotable).slice(0, 200) : null,
+        priceText: e.priceText ? String(e.priceText).slice(0, 60) : null,
+        bookByText: e.bookByText ? String(e.bookByText).slice(0, 120) : null,
+        url: e.url ? String(e.url).slice(0, 500) : null,
+        source: e.source ? String(e.source).slice(0, 60) : null,
+      } as TripEvent;
+    })
+    // Keep only events overlapping the date window (when dates are known).
+    .filter((e) => {
+      if (!start || !end) return true;
+      const evStart = e.date;
+      const evEnd = e.endDate || e.date;
+      return evStart <= end && evEnd >= start;
+    });
+
+  // De-dupe by id, sort by date, cap.
+  const seen = new Set<string>();
+  return normalized
+    .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 30);
 }
 
 // ============================================================
@@ -1055,7 +1140,14 @@ Return ONLY valid JSON matching this exact structure:
   "totalBudgetPerPerson": string,
   "generalTips": string
 }
-Be specific — name real restaurants, attractions, neighborhoods. Not generic tourist advice.`;
+Be specific — name real restaurants, attractions, neighborhoods. Not generic tourist advice.
+If "Live events during the trip" are provided below, weave the relevant ones into the matching day and time block (a Saturday DJ set belongs in that Saturday's evening, a Sunday farmers market in that Sunday's morning). When a block is built around one of these events, start its "notes" with "🔴 LIVE: " and mention the event by name. Don't force events that don't fit the vibe.`;
+
+      // Event Radar results (if scanned) so the itinerary is built around what's actually happening.
+      const scannedEvents: TripEvent[] = (() => { try { return plan.events ? JSON.parse(plan.events) : []; } catch { return []; } })();
+      const eventsBlock = scannedEvents.length > 0
+        ? `\nLive events during the trip (from Event Radar — prioritize fitting these in):\n${scannedEvents.map((e) => `- ${e.date}${e.timeText ? ` ${e.timeText}` : ""} · ${e.title} (${e.category})${e.venue ? ` @ ${e.venue}` : ""}${e.whyNotable ? ` — ${e.whyNotable}` : ""}`).join("\n")}`
+        : "";
 
       const userPrompt = `Destination: ${plan.destination}
 Dates: ${plan.startDate ?? "TBD"} to ${plan.endDate ?? "TBD"} (${days} days)
@@ -1065,7 +1157,7 @@ Vibe: ${prefs.vibe ?? "mix of everything"}
 Budget: ${prefs.budget ?? "$$"}
 Transport: ${prefs.transport ?? "mix"}
 Must-dos: ${prefs.mustDos ?? "none specified"}
-Off-limits: ${prefs.offLimits ?? "none"}`;
+Off-limits: ${prefs.offLimits ?? "none"}${eventsBlock}`;
 
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -1082,6 +1174,33 @@ Off-limits: ${prefs.offLimits ?? "none"}`;
     } catch (e) {
       console.error("generate-itinerary error:", e);
       res.status(500).json({ message: "Failed to generate itinerary" });
+    }
+  });
+
+  // ─── Event Radar: scan for time-specific local events on the trip dates ──────────
+  app.post("/api/groups/:groupId/scan-events", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId, force } = req.body ?? {};
+    if (await blockIfGuest(participantId, res)) return;
+    try {
+      const plan = await storage.getTripPlanByGroup(groupId);
+      if (!plan?.destination) return res.status(400).json({ message: "Add a destination first so I know where to look." });
+
+      const scanKey = `${plan.destination}|${plan.startDate ?? ""}|${plan.endDate ?? ""}`;
+      if (!force && plan.eventsScanKey === scanKey && plan.events) {
+        return res.json({ events: JSON.parse(plan.events), cached: true, scannedAt: plan.eventsScannedAt });
+      }
+
+      const events = await runEventRadarScan(plan);
+      await storage.saveTripEvents(groupId, events, scanKey);
+      if (events.length > 0) {
+        const headline = events.slice(0, 3).map((e) => e.title).join(", ");
+        await storage.createPipMessage(groupId, `📡 Event Radar found ${events.length} thing${events.length === 1 ? "" : "s"} happening in ${plan.destination} while you're there — including ${headline}. Check the Itinerary panel so nobody finds out after the fact 👀`);
+      }
+      res.json({ events, cached: false, scannedAt: new Date().toISOString() });
+    } catch (e) {
+      console.error("scan-events error:", e);
+      res.status(500).json({ message: "Failed to scan for events" });
     }
   });
 

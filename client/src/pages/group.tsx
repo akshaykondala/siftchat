@@ -21,7 +21,7 @@ import {
   MessageCircle, ThumbsUp, Star, ChevronDown, ChevronUp, Plane,
   Heart, AlertCircle, UserCheck, Lock, LockOpen, Clock, Globe, Map as MapIcon, Compass, Mail, X,
 } from "lucide-react";
-import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal, ParticipantRole, Participant } from "@shared/schema";
+import type { TripPlan, TripAlternative, CommitmentLevel, SupportSignal, ParticipantRole, Participant, TripEvent } from "@shared/schema";
 import { PipAvatar } from "@/components/pip-avatar";
 import { PipCharacter } from "@/components/pip-character";
 
@@ -1921,19 +1921,41 @@ const BLOCK_KEYS = ["morning", "afternoon", "evening"] as const;
 type BlockKey = typeof BLOCK_KEYS[number];
 interface ItinBlock { activity: string; cost: string; transport: string; notes: string; }
 interface ItinDay { dayNumber: number; date: string | null; morning: ItinBlock; afternoon: ItinBlock; evening: ItinBlock; }
+const EVENT_EMOJI: Record<string, string> = {
+  music: "🎵", nightlife: "🎧", festival: "🎪", market: "🧺",
+  food: "🍽️", sports: "🏟️", art: "🎨", seasonal: "🍁", other: "📍",
+};
+function formatEventDate(date: string, endDate?: string | null): string {
+  try {
+    const d = parseISO(date);
+    const base = isValid(d) ? format(d, "EEE MMM d") : date;
+    if (endDate && endDate !== date) {
+      const e = parseISO(endDate);
+      return `${base} – ${isValid(e) ? format(e, "MMM d") : endDate}`;
+    }
+    return base;
+  } catch { return date; }
+}
+
 interface ItinData { destination: string; days: ItinDay[]; totalBudgetPerPerson: string; generalTips: string; }
 interface ItinSugg { id: number; dayIndex: number; blockIndex: number; suggestion: string; proposedBy: string; votes: number; applied: boolean; }
 
-function ItinerarySection({ trip, groupId, participantName, participantCount, canEdit = true }: {
+function ItinerarySection({ trip, groupId, participantId, participantName, participantCount, canEdit = true, onTripUpdate }: {
   trip: TripPlan;
   groupId: number;
+  participantId: number;
   participantName: string;
   participantCount: number;
   canEdit?: boolean;
+  onTripUpdate?: () => void;
 }) {
   const parsedItinerary: ItinData | null = (() => { try { return trip.itinerary ? JSON.parse(trip.itinerary) : null; } catch { return null; } })();
   const savedPrefs = (() => { try { return trip.itineraryPrefs ? JSON.parse(trip.itineraryPrefs) : {}; } catch { return {}; } })();
+  const parsedEvents: TripEvent[] = (() => { try { return trip.events ? JSON.parse(trip.events) : []; } catch { return []; } })();
 
+  const [events, setEvents] = React.useState<TripEvent[]>(parsedEvents);
+  const [scanning, setScanning] = React.useState(false);
+  const autoScannedRef = React.useRef(false);
   const [localItinerary, setLocalItinerary] = React.useState<ItinData | null>(parsedItinerary);
   const [suggestions, setSuggestions] = React.useState<ItinSugg[]>([]);
   const [expandedDay, setExpandedDay] = React.useState<number | null>(null);
@@ -1993,6 +2015,35 @@ function ItinerarySection({ trip, groupId, participantName, participantCount, ca
     loadSuggestions();
   };
 
+  // ── Event Radar: scan for what's actually happening on the trip dates ──
+  const scanEvents = React.useCallback(async (force = false) => {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      const token = localStorage.getItem("siftchat_token");
+      const res = await fetch(`/api/groups/${groupId}/scan-events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ participantId, force }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.events)) setEvents(data.events);
+        onTripUpdate?.();
+      }
+    } catch { /* keep prior events */ } finally { setScanning(false); }
+  }, [groupId, participantId, scanning, onTripUpdate]);
+
+  // Auto-scan once when we have a destination + dates but no events yet.
+  React.useEffect(() => {
+    if (autoScannedRef.current) return;
+    if (!canEdit) return;
+    if (events.length > 0) return;
+    if (!trip.destination || !trip.startDate || !trip.endDate) return;
+    autoScannedRef.current = true;
+    scanEvents(false);
+  }, [canEdit, events.length, trip.destination, trip.startDate, trip.endDate, scanEvents]);
+
   const overrides = new Map<string, string>();
   for (const s of suggestions) {
     if (s.applied) overrides.set(`${s.dayIndex}-${s.blockIndex}`, s.suggestion);
@@ -2022,6 +2073,65 @@ function ItinerarySection({ trip, groupId, participantName, participantCount, ca
           <button onClick={() => setShowIntake(true)} className="text-[10px] font-bold text-primary hover:underline">Regenerate</button>
         )}
       </div>
+
+      {/* ── Event Radar: what's actually happening while you're there ── */}
+      {(trip.destination && (trip.startDate && trip.endDate)) && (
+        <div className="mb-3 rounded-2xl border border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50/60 to-fuchsia-50/40 dark:from-violet-950/20 dark:to-fuchsia-950/10 overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm">📡</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-violet-700 dark:text-violet-300">Happening while you're there</span>
+            </div>
+            {canEdit && (
+              <button
+                onClick={() => scanEvents(true)}
+                disabled={scanning}
+                className="text-[10px] font-bold text-violet-600 dark:text-violet-300 hover:underline disabled:opacity-50 flex items-center gap-1"
+              >
+                {scanning ? <><Loader2 className="w-3 h-3 animate-spin" /> Scanning…</> : events.length > 0 ? "Rescan" : "Scan"}
+              </button>
+            )}
+          </div>
+
+          {scanning && events.length === 0 ? (
+            <div className="px-3 pb-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Sweeping concerts, markets, festivals & pop-ups on your dates…
+            </div>
+          ) : events.length === 0 ? (
+            <div className="px-3 pb-3 text-[11px] text-muted-foreground">
+              {canEdit ? "No events found yet — tap Scan to sweep your dates for concerts, markets, festivals & pop-ups." : "No events surfaced yet."}
+            </div>
+          ) : (
+            <div className="px-2 pb-2 space-y-1.5 max-h-[280px] overflow-y-auto scrollbar-hide">
+              {events.map((e) => {
+                const inner = (
+                  <div className="flex items-start gap-2.5 rounded-xl bg-card/80 border border-border/50 px-2.5 py-2 hover:border-violet-300 dark:hover:border-violet-700 transition-colors">
+                    <span className="text-base leading-none mt-0.5 shrink-0">{EVENT_EMOJI[e.category] ?? "📍"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[12px] font-bold leading-snug truncate flex-1">{e.title}</p>
+                        {e.url && <span className="text-violet-400 text-[9px] shrink-0">↗</span>}
+                      </div>
+                      <p className="text-[10px] font-semibold text-violet-600 dark:text-violet-300 mt-0.5">
+                        {formatEventDate(e.date, e.endDate)}{e.timeText ? ` · ${e.timeText}` : ""}{e.venue ? ` · ${e.venue}` : e.neighborhood ? ` · ${e.neighborhood}` : ""}
+                      </p>
+                      {e.whyNotable && <p className="text-[10px] text-muted-foreground leading-snug mt-0.5">{e.whyNotable}</p>}
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {e.priceText && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">{e.priceText}</span>}
+                        {e.bookByText && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">⏰ {e.bookByText}</span>}
+                        {e.source && <span className="text-[9px] text-muted-foreground/70">via {e.source}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+                return e.url
+                  ? <a key={e.id} href={e.url} target="_blank" rel="noreferrer" className="block">{inner}</a>
+                  : <div key={e.id}>{inner}</div>;
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Guests with no itinerary yet just see a waiting note */}
       {!canEdit && !localItinerary && (
@@ -2901,9 +3011,11 @@ function TravelWorkspace({
               <ItinerarySection
                 trip={trip!}
                 groupId={groupId}
+                participantId={participantId}
                 participantName={participantName}
                 participantCount={allParticipants.length}
                 canEdit={canEdit}
+                onTripUpdate={onTripUpdate}
               />
             </SidebarSection>
           )}

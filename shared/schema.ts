@@ -94,6 +94,10 @@ export const tripPlans = pgTable("trip_plans", {
   lodgingDeadline: text("lodging_deadline"), // ISO date string "YYYY-MM-DD"
   itineraryPrefs: text("itinerary_prefs"), // JSON string: intake Q&A answers
   itinerary: text("itinerary"), // JSON string: generated day-by-day itinerary
+  events: text("events"), // JSON string: Event Radar results (date+location-aware local events)
+  eventsScanKey: text("events_scan_key"), // "destination|startDate|endDate" — re-scan when it changes
+  eventsScannedAt: timestamp("events_scanned_at"),
+  itineraryAutonomy: text("itinerary_autonomy"), // "full" | "vote" | "manual" — global hands-on/off default
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -293,6 +297,27 @@ export type TripStatus = "Early ideas" | "Narrowing options" | "Almost decided" 
 export type CommitmentLevel = "interested" | "likely" | "committed" | "unavailable";
 // Trip permission levels. Owner = full control, Editor = contribute + edit content, Guest = read-only.
 export type ParticipantRole = "owner" | "editor" | "guest";
+
+// Itinerary autonomy: how hands-on Pip is. full = plan everything; vote = suggest & group decides; manual = user drives.
+export type ItineraryAutonomy = "full" | "vote" | "manual";
+
+// A single time-boxed local event discovered by Event Radar for the trip dates.
+export interface TripEvent {
+  id: string;             // stable hash id
+  title: string;
+  category: string;       // music | nightlife | festival | market | food | sports | art | seasonal | other
+  date: string;           // "YYYY-MM-DD" (start day)
+  endDate?: string | null;
+  timeText?: string | null;   // "7pm", "all day", "Sat–Sun"
+  venue?: string | null;
+  neighborhood?: string | null;
+  description: string;
+  whyNotable?: string | null; // why this is worth catching
+  priceText?: string | null;
+  bookByText?: string | null; // lead-time / sellout-risk note
+  url?: string | null;        // source link
+  source?: string | null;     // "Eventbrite" / "Resident Advisor" / domain / "TikTok"
+}
 
 // Typed structure for AI extraction output
 export interface AiTripExtraction {

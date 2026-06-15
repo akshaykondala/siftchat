@@ -1956,10 +1956,13 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
   const [events, setEvents] = React.useState<TripEvent[]>(parsedEvents);
   const [scanning, setScanning] = React.useState(false);
   const autoScannedRef = React.useRef(false);
+  const [autonomy, setAutonomyState] = React.useState<"full" | "vote" | "manual">((trip.itineraryAutonomy as any) ?? "vote");
+  const [editingBlock, setEditingBlock] = React.useState<{ day: number; block: number } | null>(null);
+  const [editText, setEditText] = React.useState("");
   const [localItinerary, setLocalItinerary] = React.useState<ItinData | null>(parsedItinerary);
   const [suggestions, setSuggestions] = React.useState<ItinSugg[]>([]);
   const [expandedDay, setExpandedDay] = React.useState<number | null>(null);
-  const [showIntake, setShowIntake] = React.useState(!parsedItinerary);
+  const [showIntake, setShowIntake] = React.useState(() => !parsedItinerary && (((trip.itineraryAutonomy as any) ?? "vote") === "vote"));
   const [generating, setGenerating] = React.useState(false);
   const [prefs, setPrefs] = React.useState({ meals: savedPrefs.meals ?? "2", vibe: savedPrefs.vibe ?? "", budget: savedPrefs.budget ?? "$$", transport: savedPrefs.transport ?? "", mustDos: savedPrefs.mustDos ?? "", offLimits: savedPrefs.offLimits ?? "" });
   const [suggestingBlock, setSuggestingBlock] = React.useState<{ day: number; block: number } | null>(null);
@@ -1975,8 +1978,7 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
 
   React.useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
 
-  const generate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const runGenerate = async () => {
     setGenerating(true);
     const token = localStorage.getItem("siftchat_token");
     await fetch(`/api/groups/${groupId}/itinerary-prefs`, {
@@ -1991,6 +1993,7 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
     if (res?.ok) { const data = await res.json(); setLocalItinerary(data); setShowIntake(false); }
     setGenerating(false);
   };
+  const generate = async (e: React.FormEvent) => { e.preventDefault(); await runGenerate(); };
 
   const submitSuggestion = async () => {
     if (!suggestingBlock || !suggestionText.trim()) return;
@@ -2044,6 +2047,47 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
     scanEvents(false);
   }, [canEdit, events.length, trip.destination, trip.startDate, trip.endDate, scanEvents]);
 
+  // ── Autonomy dial: how hands-on Pip is ──
+  const authed = (body: object) => {
+    const token = localStorage.getItem("siftchat_token");
+    return { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) } as RequestInit;
+  };
+
+  const setAutonomy = async (mode: "full" | "vote" | "manual") => {
+    setAutonomyState(mode);
+    await fetch(`/api/groups/${groupId}/itinerary-autonomy`, authed({ participantId, autonomy: mode })).catch(() => {});
+    onTripUpdate?.();
+  };
+
+  // Inline block edit (hands-on / manual blocks).
+  const saveBlockEdit = async (dayIndex: number, blockIndex: number, activity: string) => {
+    const res = await fetch(`/api/groups/${groupId}/itinerary-block`, authed({ participantId, dayIndex, blockIndex, activity })).catch(() => null);
+    if (res && res.ok) { const data = await res.json(); setLocalItinerary(data); }
+    setEditingBlock(null); setEditText("");
+  };
+
+  // "I'll drive": scaffold a blank day-by-day from the trip dates to fill in manually.
+  const startBlank = async () => {
+    const dayCount = trip.startDate && trip.endDate
+      ? Math.max(1, Math.round((new Date(trip.endDate).getTime() - new Date(trip.startDate).getTime()) / 86400000) + 1)
+      : 3;
+    const emptyBlock = { activity: "", cost: "", transport: "", notes: "" };
+    const blank: ItinData = {
+      destination: trip.destination ?? "",
+      days: Array.from({ length: dayCount }, (_, i) => ({
+        dayNumber: i + 1,
+        date: trip.startDate ? new Date(new Date(trip.startDate).getTime() + i * 86400000).toISOString().slice(0, 10) : null,
+        morning: { ...emptyBlock }, afternoon: { ...emptyBlock }, evening: { ...emptyBlock },
+      })) as any,
+      totalBudgetPerPerson: "",
+      generalTips: "",
+    };
+    setGenerating(true);
+    const res = await fetch(`/api/groups/${groupId}/itinerary`, authed({ participantId, itinerary: blank })).catch(() => null);
+    setGenerating(false);
+    if (res && res.ok) { setLocalItinerary(blank); setShowIntake(false); setExpandedDay(0); onTripUpdate?.(); }
+  };
+
   const overrides = new Map<string, string>();
   for (const s of suggestions) {
     if (s.applied) overrides.set(`${s.dayIndex}-${s.blockIndex}`, s.suggestion);
@@ -2069,18 +2113,54 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
         <div className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
           <MapIcon className="w-3 h-3" /> Itinerary
         </div>
-        {canEdit && localItinerary && !showIntake && (
+        {canEdit && localItinerary && !showIntake && autonomy !== "manual" && (
           <button onClick={() => setShowIntake(true)} className="text-[10px] font-bold text-primary hover:underline">Regenerate</button>
         )}
       </div>
+
+      {/* ── Autonomy dial: how hands-on Pip is ── */}
+      {canEdit && (
+        <div className="mb-3 rounded-2xl border bg-card p-2">
+          <div className="grid grid-cols-3 gap-1">
+            {([
+              { mode: "full" as const, emoji: "🪄", label: "Plan it all" },
+              { mode: "vote" as const, emoji: "🗳️", label: "Suggest & vote" },
+              { mode: "manual" as const, emoji: "✋", label: "I'll drive" },
+            ]).map(({ mode, emoji, label }) => (
+              <button
+                key={mode}
+                onClick={() => setAutonomy(mode)}
+                data-testid={`autonomy-${mode}`}
+                className={cn(
+                  "flex flex-col items-center gap-0.5 rounded-xl py-1.5 px-1 text-center transition-colors border",
+                  autonomy === mode
+                    ? "bg-primary/10 border-primary/40 text-primary"
+                    : "bg-transparent border-transparent text-muted-foreground hover:bg-secondary/50"
+                )}
+              >
+                <span className="text-sm leading-none">{emoji}</span>
+                <span className="text-[9px] font-bold leading-tight">{label}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-[9px] text-muted-foreground mt-1.5 px-1 leading-snug text-center">
+            {autonomy === "full" && "Pip plans the whole trip — you tweak anything you want."}
+            {autonomy === "vote" && "Pip drafts it; the group suggests changes and votes them in."}
+            {autonomy === "manual" && "You build it. Pip stays out of the way until you ask."}
+          </p>
+        </div>
+      )}
 
       {/* ── Event Radar: what's actually happening while you're there ── */}
       {(trip.destination && (trip.startDate && trip.endDate)) && (
         <div className="mb-3 rounded-2xl border border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50/60 to-fuchsia-50/40 dark:from-violet-950/20 dark:to-fuchsia-950/10 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-sm">📡</span>
-              <span className="text-[10px] font-black uppercase tracking-widest text-violet-700 dark:text-violet-300">Happening while you're there</span>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-sm shrink-0">📡</span>
+              <div className="min-w-0">
+                <span className="text-[10px] font-black uppercase tracking-widest text-violet-700 dark:text-violet-300 block leading-none">Happening while you're there</span>
+                <span className="text-[9px] text-muted-foreground">Bonus extras — your plan doesn't hinge on these</span>
+              </div>
             </div>
             {canEdit && (
               <button
@@ -2137,6 +2217,31 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
       {!canEdit && !localItinerary && (
         <div className="rounded-2xl border bg-card p-3 text-[11px] text-muted-foreground">
           No itinerary yet — an editor or owner will build it.
+        </div>
+      )}
+
+      {/* Mode-aware empty state — what to do when there's no itinerary yet */}
+      {canEdit && !localItinerary && !showIntake && (
+        <div className="mb-3 rounded-2xl border bg-card p-3 space-y-2">
+          {autonomy === "full" && (
+            <>
+              <button onClick={runGenerate} disabled={generating} className="w-full h-9 rounded-xl bg-primary text-primary-foreground text-xs font-bold disabled:opacity-60 flex items-center justify-center gap-1.5">
+                {generating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Planning your trip…</> : <>🪄 Plan my whole trip</>}
+              </button>
+              <button onClick={() => setShowIntake(true)} className="w-full text-[10px] font-bold text-muted-foreground hover:text-primary">Tweak preferences first</button>
+            </>
+          )}
+          {autonomy === "manual" && (
+            <>
+              <button onClick={startBlank} disabled={generating} className="w-full h-9 rounded-xl bg-primary text-primary-foreground text-xs font-bold disabled:opacity-60 flex items-center justify-center gap-1.5">
+                {generating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Setting up…</> : <>✋ Start a blank itinerary</>}
+              </button>
+              <button onClick={() => setShowIntake(true)} className="w-full text-[10px] font-bold text-muted-foreground hover:text-primary">Or let Pip draft a starting point</button>
+            </>
+          )}
+          {autonomy === "vote" && (
+            <button onClick={() => setShowIntake(true)} className="w-full h-9 rounded-xl bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center gap-1.5">🗳️ Build the itinerary</button>
+          )}
         </div>
       )}
 
@@ -2276,21 +2381,38 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
                               <div key={key} className="rounded-xl bg-secondary/30 p-2.5">
                                 <div className="flex items-center justify-between mb-1">
                                   <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">{BLOCK_LABELS[bi]}</span>
-                                  {canEdit && (
+                                  {canEdit && autonomy === "vote" && (
                                     <button onClick={() => { setSuggestingBlock(isSuggesting ? null : { day: di, block: bi }); setSuggestionText(""); }}
                                       className="text-[9px] font-bold text-primary/70 hover:text-primary transition-colors">
                                       {isSuggesting ? "Cancel" : "Suggest change"}
                                     </button>
                                   )}
+                                  {canEdit && autonomy !== "vote" && editingBlock?.day !== di && (
+                                    <button onClick={() => { setEditingBlock({ day: di, block: bi }); setEditText(appliedText ?? block?.activity ?? ""); }}
+                                      className="text-[9px] font-bold text-primary/70 hover:text-primary transition-colors">
+                                      ✎ Edit
+                                    </button>
+                                  )}
                                 </div>
 
-                                {appliedText ? (
+                                {canEdit && autonomy !== "vote" && editingBlock?.day === di && editingBlock?.block === bi ? (
+                                  <div className="flex gap-1.5">
+                                    <input autoFocus value={editText} onChange={e => setEditText(e.target.value)}
+                                      onKeyDown={e => e.key === "Enter" && !e.shiftKey && saveBlockEdit(di, bi, editText)}
+                                      placeholder="What's the plan for this block?"
+                                      className="flex-1 h-7 rounded-lg bg-background border border-border px-2 text-[10px] focus:outline-none focus:border-primary/40" />
+                                    <button onClick={() => saveBlockEdit(di, bi, editText)}
+                                      className="h-7 px-2.5 rounded-lg bg-primary text-primary-foreground text-[10px] font-bold transition-colors">Save</button>
+                                    <button onClick={() => { setEditingBlock(null); setEditText(""); }}
+                                      className="h-7 px-2 rounded-lg bg-secondary text-muted-foreground text-[10px] font-bold">✕</button>
+                                  </div>
+                                ) : appliedText ? (
                                   <p className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 leading-snug">
                                     {appliedText} <span className="text-[9px] text-emerald-500 font-bold">✓ updated by group</span>
                                   </p>
                                 ) : (
                                   <>
-                                    <p className="text-[11px] font-semibold leading-snug">{block?.activity ?? "—"}</p>
+                                    <p className="text-[11px] font-semibold leading-snug">{block?.activity || <span className="text-muted-foreground/50 italic font-normal">Empty — tap Edit to fill it in</span>}</p>
                                     <div className="flex gap-3 mt-1 text-[10px] text-muted-foreground flex-wrap">
                                       {block?.cost && <span>💰 {block.cost}</span>}
                                       {block?.transport && <span>🚗 {block.transport}</span>}
@@ -2300,7 +2422,7 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
                                 )}
 
                                 <AnimatePresence>
-                                  {isSuggesting && (
+                                  {autonomy === "vote" && isSuggesting && (
                                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="mt-2 overflow-hidden">
                                       <div className="flex gap-1.5">
                                         <input autoFocus value={suggestionText} onChange={e => setSuggestionText(e.target.value)}
@@ -2316,7 +2438,7 @@ function ItinerarySection({ trip, groupId, participantId, participantName, parti
                                   )}
                                 </AnimatePresence>
 
-                                {blockSuggs.length > 0 && (
+                                {autonomy === "vote" && blockSuggs.length > 0 && (
                                   <div className="mt-2 space-y-1">
                                     {blockSuggs.map(s => (
                                       <div key={s.id} className="flex items-start gap-1.5 bg-background rounded-lg px-2 py-1.5 border border-border/40">

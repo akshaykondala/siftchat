@@ -1,8 +1,8 @@
 ## 🔴 P0 — Critical
 - [ ] Mobile UI overhaul — full audit of all screens (dashboard, auth, group header spacing) on device
 - [ ] Rebuild Xcode app after `npx cap sync ios` — open Xcode, Debug signing, add Push Notifications + Background Modes capabilities, select iPhone, hit Run ▶
-- [ ] **Itinerary: Event Radar (FIRST BUILD)** — date+location-aware local events engine; surface concerts, DJ sets, festivals, farmers markets, pop-ups, sports during the EXACT trip dates, woven into the day-by-day with source citations. Sourcing = HYBRID (event APIs for ticketed: Ticketmaster/SeatGeek/Bandsintown/RA/Songkick + web-search LLM for the long tail). Start with keyless web-search half, layer APIs as keys arrive.
-- [ ] **Itinerary: Autonomy dial** — hands-on ↔ hands-off: global trip mode (Plan it all / Suggest & we vote / I'll drive) WITH per-day/per-block override.
+- [ ] **Itinerary: Per-block autonomy override** — let a single day/block override the global dial (e.g. trip is "Plan it all" but Saturday evening is "we vote"). Global dial + inline edit shipped; per-block override deferred from first pass.
+- [ ] **Itinerary: Event Radar ticketed APIs** — layer Ticketmaster/SeatGeek/Bandsintown/RA/Songkick behind the TripEvent interface. NOTE: events stay a BONUS ("oh btw there's an event here"), never a primary planner driver.
 - [ ] **Itinerary: Event Radar proactive scan** — re-scan at T-2wk / T-1wk; ping ONLY for big new announcements, sellout risk, or book-by deadlines (max ~1/scan).
 
 ## 🟠 P1 — High
@@ -27,6 +27,8 @@
 ## ⚪ P3 — Low / Nice-to-have
 
 ## ✅ Done
+- [x] Itinerary: Event Radar (web-search half) — date+location event scan woven in as a bonus, "Happening while you're there" feed with source links, auto-scan + Pip ping
+- [x] Itinerary: Autonomy dial — global Plan-it-all / Suggest-&-vote / I'll-drive modes; one-tap full plan, blank scaffold + inline block editing for manual, vote flow gated by mode
 - [x] Group availability panel collapsed by default in trip sidebar — one-tap reveal button, Pip uses it not users
 - [x] Pip deduplication — prevent double messages in same processing run (phase guidance skips if pipMessage already posted this run)
 - [x] Pip date/location extraction — improved prompt: handles natural language, relative dates, month-only ranges, always detecting destination + dates across all message formats

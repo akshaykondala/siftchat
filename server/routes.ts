@@ -1141,12 +1141,12 @@ Return ONLY valid JSON matching this exact structure:
   "generalTips": string
 }
 Be specific — name real restaurants, attractions, neighborhoods. Not generic tourist advice.
-If "Live events during the trip" are provided below, weave the relevant ones into the matching day and time block (a Saturday DJ set belongs in that Saturday's evening, a Sunday farmers market in that Sunday's morning). When a block is built around one of these events, start its "notes" with "🔴 LIVE: " and mention the event by name. Don't force events that don't fit the vibe.`;
+Build the plan around the group's vibe and must-dos FIRST — that is the backbone. Any "Live events during the trip" listed below are an optional BONUS, not the plan's foundation: only mention one if it happens to land on a day and genuinely fits what the group already wants to do. If you include one, add it lightly to that block's "notes" as "🎟️ Bonus: <event>" — never reshape the day around it, and never feel obligated to use any of them.`;
 
-      // Event Radar results (if scanned) so the itinerary is built around what's actually happening.
+      // Event Radar results (if scanned) — surfaced only as an optional bonus, never the backbone.
       const scannedEvents: TripEvent[] = (() => { try { return plan.events ? JSON.parse(plan.events) : []; } catch { return []; } })();
       const eventsBlock = scannedEvents.length > 0
-        ? `\nLive events during the trip (from Event Radar — prioritize fitting these in):\n${scannedEvents.map((e) => `- ${e.date}${e.timeText ? ` ${e.timeText}` : ""} · ${e.title} (${e.category})${e.venue ? ` @ ${e.venue}` : ""}${e.whyNotable ? ` — ${e.whyNotable}` : ""}`).join("\n")}`
+        ? `\nLive events during the trip (OPTIONAL bonus — only mention if one happens to fit a day, otherwise ignore):\n${scannedEvents.map((e) => `- ${e.date}${e.timeText ? ` ${e.timeText}` : ""} · ${e.title} (${e.category})${e.venue ? ` @ ${e.venue}` : ""}`).join("\n")}`
         : "";
 
       const userPrompt = `Destination: ${plan.destination}
@@ -1202,6 +1202,53 @@ Off-limits: ${prefs.offLimits ?? "none"}${eventsBlock}`;
       console.error("scan-events error:", e);
       res.status(500).json({ message: "Failed to scan for events" });
     }
+  });
+
+  // ─── Itinerary autonomy: how hands-on Pip is (full | vote | manual) ──────────────
+  app.post("/api/groups/:groupId/itinerary-autonomy", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId, autonomy } = req.body ?? {};
+    if (!["full", "vote", "manual"].includes(autonomy)) return res.status(400).json({ message: "autonomy must be full, vote, or manual" });
+    if (await blockIfGuest(participantId, res)) return;
+    try {
+      const trip = await storage.upsertTripPlan(groupId, { itineraryAutonomy: autonomy } as any);
+      res.json({ itineraryAutonomy: trip.itineraryAutonomy });
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  // Save a full itinerary (used for the "I'll drive" blank scaffold and direct edits).
+  app.post("/api/groups/:groupId/itinerary", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId, itinerary } = req.body ?? {};
+    if (!itinerary || typeof itinerary !== "object") return res.status(400).json({ message: "itinerary required" });
+    if (await blockIfGuest(participantId, res)) return;
+    try {
+      await storage.saveItinerary(groupId, itinerary);
+      res.json(itinerary);
+    } catch { res.status(500).json({ message: "Internal Server Error" }); }
+  });
+
+  // Edit a single itinerary block in place (manual / hands-on mode).
+  app.post("/api/groups/:groupId/itinerary-block", async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    const { participantId, dayIndex, blockIndex, activity, cost, transport, notes } = req.body ?? {};
+    if (dayIndex == null || blockIndex == null) return res.status(400).json({ message: "dayIndex and blockIndex required" });
+    if (await blockIfGuest(participantId, res)) return;
+    try {
+      const plan = await storage.getTripPlanByGroup(groupId);
+      const itinerary = plan?.itinerary ? JSON.parse(plan.itinerary) : null;
+      const blockKey = ["morning", "afternoon", "evening"][Number(blockIndex)];
+      if (!itinerary?.days?.[Number(dayIndex)] || !blockKey) return res.status(400).json({ message: "Block not found" });
+      const block = itinerary.days[Number(dayIndex)][blockKey] ?? {};
+      itinerary.days[Number(dayIndex)][blockKey] = {
+        activity: activity !== undefined ? String(activity) : (block.activity ?? ""),
+        cost: cost !== undefined ? String(cost) : (block.cost ?? ""),
+        transport: transport !== undefined ? String(transport) : (block.transport ?? ""),
+        notes: notes !== undefined ? String(notes) : (block.notes ?? ""),
+      };
+      await storage.saveItinerary(groupId, itinerary);
+      res.json(itinerary);
+    } catch (e) { console.error("itinerary-block error:", e); res.status(500).json({ message: "Internal Server Error" }); }
   });
 
   app.get("/api/groups/:groupId/itinerary-suggestions", async (req, res) => {

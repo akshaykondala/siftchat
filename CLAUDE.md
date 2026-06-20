@@ -73,6 +73,12 @@ The problem isn't planning — it's commitment and accountability. When your fri
 
 ## Deployment
 - Railway auto-deploys on push to `main`
-- Build command: `npm install --include=dev && npm run build && npm run db:push`
+- Build command: `npm install --include=dev && npm run build`
 - Start command: `npm start`
-- After schema changes always run: `DATABASE_URL="postgresql://postgres:REDACTED@roundhouse.proxy.rlwy.net:23925/railway" npm run db:push`
+
+### Database migrations (IMPORTANT — read before changing `shared/schema.ts`)
+- Prod uses a Railway-internal Postgres (`siftchat-db.railway.internal`) that is **NOT reachable during the build phase** — that's why build-time `db:push` silently failed and broke prod once. Migrations now run **at app startup** instead.
+- Migrations are committed SQL files in `migrations/`, applied by `migrate()` in `server/index.ts` on boot (runtime DB is always reachable). A bad migration fails startup → deploy fails loudly instead of serving a mismatched schema.
+- **Workflow for any schema change:** edit `shared/schema.ts` → run `npm run db:generate` → commit the new `migrations/*.sql` + `migrations/meta/*` → push. Railway applies it automatically on the next boot.
+- `npm run db:push` is now for **local/dev only** (or emergencies). Do not rely on it for prod.
+- The DBs were baselined: `migrations/0000_*` is recorded as already-applied in `drizzle.__drizzle_migrations` on both prod and the Neon dev DB, so existing tables aren't recreated.

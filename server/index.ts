@@ -3,6 +3,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { db } from "./db";
 
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
@@ -70,6 +72,18 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Apply pending DB migrations at startup. Unlike the build phase, the runtime
+  // container can always reach the database, so this is where schema changes
+  // reliably land. Fail loudly: a bad/blocked migration should fail the deploy
+  // rather than silently serve a mismatched schema.
+  try {
+    await migrate(db, { migrationsFolder: "migrations" });
+    log("db migrations up to date");
+  } catch (err) {
+    console.error("FATAL: database migration failed —", err);
+    process.exit(1);
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

@@ -1,6 +1,8 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm install --include=dev && npm run build && npm run db:push"
+# NOTE: migrations are NOT run here — the build phase can't reach the DB's
+# internal host. They run at app startup instead (server/index.ts migrate()).
+buildCommand = "npm install --include=dev && npm run build"
 
 [deploy]
 startCommand = "npm start"
